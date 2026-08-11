@@ -226,7 +226,7 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
       const responseData = await res.json();
 
       if (res.ok) {
-        showNotification?.("✓ Nueva sesión de auditoría física a ciegas iniciada con éxito.", "success");
+        showNotification?.(`✓ Nueva sesión de auditoría física${isBlindMode ? ' a ciegas' : ''} iniciada con éxito.`, "success");
         await fetchActiveSession();
       } else if (responseData.segregation_warning) {
         setSegregationWarning(responseData.error);
@@ -368,7 +368,7 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
       });
 
       if (res.ok) {
-        showNotification?.("✓ Auditoría a ciegas finalizada. El reporte ha sido enviado a Administración para reconciliación.", "success");
+        showNotification?.(`✓ Auditoría${activeSession?.mode === 'BLIND' ? ' a ciegas' : ''} finalizada. El reporte ha sido enviado a Administración para reconciliación.`, "success");
         await fetchActiveSession();
         await fetchHistory();
       } else {
@@ -529,14 +529,22 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-extrabold text-sm md:text-base text-slate-850 dark:text-white uppercase tracking-tight leading-none">
-                  Control Físico & Auditoría a Ciegas
+                  Control Físico & Auditoría{activeSession?.mode === 'BLIND' ? ' a Ciegas' : ''}
                 </h3>
-                <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border border-indigo-500/20">
-                  A Ciegas (Sin Sesgo)
-                </span>
+                {activeSession?.mode === 'BLIND' ? (
+                  <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border border-indigo-500/20">
+                    A Ciegas (Sin Sesgo)
+                  </span>
+                ) : (
+                  <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border border-emerald-500/20">
+                    Con Visibilidad de Stock
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1 leading-none">
-                El stock registrado se oculta al auditor durante el conteo para garantizar máxima integridad.
+                {activeSession?.mode === 'BLIND' 
+                  ? 'El stock registrado se oculta al auditor durante el conteo para garantizar máxima integridad.' 
+                  : 'Modo administrativo: visualizando cantidades esperadas en sistema.'}
               </p>
             </div>
           </div>
@@ -589,10 +597,12 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                   </div>
                   <div className="max-w-lg text-center">
                     <h4 className="font-extrabold text-base md:text-lg text-slate-800 dark:text-slate-200 uppercase tracking-wide">
-                      Iniciar Control Físico de Inventario a Ciegas
+                      Iniciar Control Físico de Inventario{isBlindMode ? ' a Ciegas' : ''}
                     </h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 font-medium leading-relaxed">
-                      Auditoría sin sesgo de confirmación. El personal cuenta las unidades reales en anaquel sin visualizar la cantidad que el sistema espera.
+                      {isBlindMode
+                        ? 'Auditoría sin sesgo de confirmación. El personal cuenta las unidades reales en anaquel sin visualizar la cantidad que el sistema espera.'
+                        : 'El personal administrativo verifica el inventario con visibilidad completa de las cantidades registradas en el sistema.'}
                     </p>
                   </div>
 
@@ -707,9 +717,11 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                     <button
                       onClick={handleStartSession}
                       disabled={isLoading}
-                      className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs uppercase rounded-xl tracking-wider shadow-lg transition active:scale-98 cursor-pointer select-none mt-1"
+                      className={`w-full py-3.5 hover:bg-opacity-90 text-white font-extrabold text-xs uppercase rounded-xl tracking-wider shadow-lg transition active:scale-98 cursor-pointer select-none mt-1 ${
+                        isBlindMode ? 'bg-indigo-600' : 'bg-emerald-600'
+                      }`}
                     >
-                      {isLoading ? 'Iniciando Auditoría...' : 'Iniciar Auditoría a Ciegas'}
+                      {isLoading ? 'Iniciando Auditoría...' : (isBlindMode ? 'Iniciar Auditoría a Ciegas' : 'Iniciar Auditoría')}
                     </button>
                   </div>
                 </div>
@@ -1155,14 +1167,14 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                       <button
                         onClick={handleCompleteSession}
                         disabled={activeSummary.pendingItems > 0 || isLoading}
-                        className={`py-3 px-6 font-black text-xs uppercase rounded-xl transition shadow-lg flex-1 cursor-pointer flex items-center justify-center gap-2 ${
+                        className={`py-3 px-6 font-black text-xs uppercase rounded-xl transition shadow-lg flex-[1.5] cursor-pointer flex items-center justify-center gap-2 ${
                           activeSummary.pendingItems > 0 
                             ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed shadow-none' 
-                            : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-650/10'
+                            : activeSession?.mode === 'BLIND' ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-650/10' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-650/10'
                         }`}
                       >
                         <Check size={14} />
-                        <span>Concluir Auditoría a Ciegas</span>
+                        <span>Concluir Auditoría{activeSession?.mode === 'BLIND' ? ' a Ciegas' : ''}</span>
                       </button>
                     </div>
                   </div>

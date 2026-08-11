@@ -2642,8 +2642,8 @@ export default function POS() {
                     </div>
 
                     {/* Search & Categories bar */}
-                    <div className="flex flex-col lg:flex-row gap-3 items-center justify-between bg-white dark:bg-[#0c111e] p-2.5 lg:p-3.5 rounded-2xl lg:rounded-3xl border border-slate-200/60 dark:border-slate-850 select-none shrink-0 shadow-xs">
-                        <div className="flex gap-2.5 w-full lg:w-[50%] xl:w-[55%] items-center shrink-0">
+                    <div className="flex flex-col xl:flex-row gap-3 xl:gap-4 items-center justify-between bg-white dark:bg-[#0c111e] p-2.5 lg:p-3.5 rounded-2xl lg:rounded-3xl border border-slate-200/60 dark:border-slate-850 select-none shrink-0 shadow-xs">
+                        <div className="flex gap-2.5 w-full xl:w-5/12 items-center shrink-0">
                             <POSSearchInput 
                                 initialValue={search} 
                                 onSearchChange={(val) => setSearch(val)} 
@@ -2666,7 +2666,7 @@ export default function POS() {
                             </button>
                         </div>
                         
-                        <div className="flex flex-col sm:flex-row items-center gap-2 w-full lg:w-[50%] xl:w-[45%] justify-between lg:justify-end overflow-hidden">
+                        <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full xl:w-7/12 justify-between xl:justify-end overflow-hidden">
                             {/* Category selectors with active active oceanic blue styles */}
                             <div className="flex gap-1 overflow-x-auto w-full sm:w-auto pb-0.5 max-w-lg scrollbar-none select-none">
                                 {categories.map(cat => (

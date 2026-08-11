@@ -2018,10 +2018,10 @@ export function DevolucionesView() {
             if (res.ok) {
                 const data = await res.json();
                 setSaleItems(data);
-                // Set default refund quantities to 0
+                // Set default refund quantities to 0, keyed by sale_item id
                 const initialQty: { [key: number]: number } = {};
                 data.forEach((it: any) => {
-                    initialQty[it.product_id] = 0;
+                    initialQty[it.id] = 0;
                 });
                 setRefundQuantities(initialQty);
             }
@@ -2030,35 +2030,36 @@ export function DevolucionesView() {
         }
     };
 
-    const incrementRefund = (productId: number, maxQty: number) => {
+    const incrementRefund = (saleItemId: number, maxQty: number) => {
         setRefundQuantities(prev => {
-            const current = prev[productId] || 0;
+            const current = prev[saleItemId] || 0;
             return {
                 ...prev,
-                [productId]: Math.min(maxQty, current + 1)
+                [saleItemId]: Math.min(maxQty, current + 1)
             };
         });
     };
 
-    const decrementRefund = (productId: number) => {
+    const decrementRefund = (saleItemId: number) => {
         setRefundQuantities(prev => {
-            const current = prev[productId] || 0;
+            const current = prev[saleItemId] || 0;
             return {
                 ...prev,
-                [productId]: Math.max(0, current - 1)
+                [saleItemId]: Math.max(0, current - 1)
             };
         });
     };
 
     const executeRefund = async () => {
         if (!selectedSale) return;
-        const itemsToRefund = Object.keys(refundQuantities)
-            .map(idStr => {
-                const productId = Number(idStr);
-                const quantity = refundQuantities[productId];
-                return { product_id: productId, quantity };
-            })
-            .filter(item => item.quantity > 0);
+        const itemsToRefund = saleItems.map(item => {
+            const qty = refundQuantities[item.id] || 0;
+            return {
+                sale_item_id: item.id,
+                product_id: item.product_id,
+                quantity: qty
+            };
+        }).filter(item => item.quantity > 0);
 
         if (itemsToRefund.length === 0) {
             setNotification("Debes seleccionar al menos 1 unidad de artículo para procesar la devolución.");
@@ -2077,13 +2078,19 @@ export function DevolucionesView() {
             });
 
             if (res.ok) {
-                setNotification("✓ Devolución realizada. Stock restituido e inventario sincronizado.");
-                setTimeout(() => setNotification(null), 4000);
+                const resData = await res.json().catch(() => ({}));
+                const reconCount = resData.inventoryReconciliation?.length || 0;
+                setNotification(`✓ Devolución procesada. Incremento de stock validado y reconciliado de forma atómica (${reconCount} ítem${reconCount !== 1 ? 's' : ''}).`);
+                setTimeout(() => setNotification(null), 5000);
                 setSelectedSale(null);
                 setSaleItems([]);
                 setRefundQuantities({});
                 loadSales();
                 fetchProducts(); // refresh master inventory numbers
+            } else {
+                const errData = await res.json().catch(() => ({}));
+                setNotification(errData.error || "Error al procesar la devolución.");
+                setTimeout(() => setNotification(null), 4000);
             }
         } catch (e) {
             console.error(e);
@@ -2183,24 +2190,36 @@ export function DevolucionesView() {
                             
                             <div className="flex flex-col gap-2.5 overflow-y-auto max-h-[300px]">
                                 {saleItems.map(item => {
-                                    const qtySelected = refundQuantities[item.product_id] || 0;
+                                    const qtySelected = refundQuantities[item.id] || 0;
+                                    const isFullyRefunded = item.quantity === 0;
                                     return (
-                                        <div key={item.product_id} className="flex justify-between items-center p-3 rounded-2xl border border-slate-150 dark:border-slate-850 bg-slate-50/50 dark:bg-black/10">
+                                        <div key={item.id} className={`flex justify-between items-center p-3 rounded-2xl border ${isFullyRefunded ? 'border-amber-500/20 bg-amber-500/5 dark:bg-amber-950/10' : 'border-slate-150 dark:border-slate-850 bg-slate-50/50 dark:bg-black/10'}`}>
                                             <div className="min-w-0 pr-3">
-                                                <h4 className="font-bold text-xs uppercase text-slate-850 dark:text-slate-200 truncate">{item.product_name}</h4>
-                                                <span className="text-[9px] font-bold text-slate-405 block mt-0.5 font-mono">Comprados: {item.quantity} pz</span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <h4 className="font-bold text-xs uppercase text-slate-850 dark:text-slate-200 truncate">{item.product_name}</h4>
+                                                    {isFullyRefunded && (
+                                                        <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                                            Devuelto
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <span className="text-[9px] font-bold text-slate-405 block mt-0.5 font-mono">
+                                                    Disponibles p/ devolución: {item.quantity} pz
+                                                </span>
                                             </div>
                                             <div className="flex items-center gap-2">
                                                 <button 
-                                                    onClick={() => decrementRefund(item.product_id)}
-                                                    className="w-6 h-6 rounded-lg bg-white dark:bg-slate-900 border text-xs font-black flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800"
+                                                    onClick={() => decrementRefund(item.id)}
+                                                    disabled={isFullyRefunded || qtySelected <= 0}
+                                                    className="w-6 h-6 rounded-lg bg-white dark:bg-slate-900 border text-xs font-black flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40"
                                                 >
                                                     -
                                                 </button>
                                                 <span className="font-mono text-xs font-extrabold w-5 text-center">{qtySelected}</span>
                                                 <button 
-                                                    onClick={() => incrementRefund(item.product_id, item.quantity)}
-                                                    className="w-6 h-6 rounded-lg bg-white dark:bg-slate-900 border text-xs font-black flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800"
+                                                    onClick={() => incrementRefund(item.id, item.quantity)}
+                                                    disabled={isFullyRefunded || qtySelected >= item.quantity}
+                                                    className="w-6 h-6 rounded-lg bg-white dark:bg-slate-900 border text-xs font-black flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40"
                                                 >
                                                     +
                                                 </button>

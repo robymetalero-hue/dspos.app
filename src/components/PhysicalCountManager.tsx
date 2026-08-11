@@ -53,8 +53,16 @@ interface CountItem {
 
 export default function PhysicalCountManager({ onClose }: PhysicalCountManagerProps) {
   const { user, products, fetchProducts, showNotification } = useAppContext();
-  const isAdmin = user?.role === 'admin' || user?.role === 'propietario' || user?.role === 'administrador';
-  const canPreviewQuantities = hasPermission(user, 'preview_quantities_in_count');
+  const isAdmin = user?.role === 'admin' || user?.role === 'propietario' || user?.role === 'administrador' || user?.role === 'dueño' || user?.role === 'jefe';
+  const canPreviewQuantities = isAdmin || hasPermission(user, 'preview_quantities_in_count');
+
+  // Prevent background page scrolling when audit overlay is active
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, []);
 
   const [activeTab, setActiveTab] = useState<'activo' | 'historico'>('activo');
   const [activeSession, setActiveSession] = useState<InventoryCount | null>(null);
@@ -111,17 +119,19 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
     }
   }, [products]);
 
-  // Check segregation warning locally
+  // Check segregation warning locally (ONLY for non-admin workers)
   useEffect(() => {
-    if (user?.username && auditorName) {
+    if (!isAdmin && user?.username && auditorName) {
       const isOperatorSelfAuditing = auditorName.toLowerCase().trim().includes(user.username.toLowerCase().trim()) || auditorName.toLowerCase().includes('cajero');
       if (isOperatorSelfAuditing && !overrideSegregation) {
-        setSegregationWarning("Advertencia de Segregación de Funciones: El auditor asignado coincide con el operador principal. Se recomienda que un auditor independiente realice el conteo o autorizar una excepción formal.");
+        setSegregationWarning("Advertencia de Segregación de Funciones: Se requiere autorización formal para auto-auditoría de trabajador.");
       } else {
         setSegregationWarning(null);
       }
+    } else {
+      setSegregationWarning(null);
     }
-  }, [auditorName, user, overrideSegregation]);
+  }, [auditorName, user, overrideSegregation, isAdmin]);
 
   const fetchActiveSession = async () => {
     setIsLoading(true);
@@ -215,7 +225,7 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
           username: user?.username || 'admin',
           auditor_name: auditorName.trim(),
           store_name: storeName.trim(),
-          notes: sessionNotes || 'Control Físico a Ciegas de Almacén',
+          notes: sessionNotes || `Control Físico de Almacén${isBlindMode ? ' a Ciegas' : ''}`,
           category_filter: selectedCategory === 'Todos' ? null : selectedCategory,
           mode: isBlindMode ? 'BLIND' : 'STANDARD',
           override_segregation: overrideSegregation ? 1 : 0,
@@ -264,7 +274,10 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
     try {
       const res = await fetch(`/api/inventory-counts/${activeSession.id}/items/${itemId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-role': user?.role || ''
+        },
         body: JSON.stringify({ 
           physical_quantity: newStock,
           status: nextStatus,
@@ -272,7 +285,8 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
         })
       });
       if (!res.ok) {
-        console.error("Failed to update count item on server database");
+        const errData = await res.json().catch(() => ({}));
+        console.error("Failed to update count item on server database:", errData.error || res.statusText);
       }
     } catch (err) {
       console.error("Network error while updating count item:", err);
@@ -361,16 +375,38 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
     if (!activeSession) return;
     setIsLoading(true);
     try {
+      const targetStatus = isAdmin ? 'cerrado' : 'completado';
       const res = await fetch(`/api/inventory-counts/${activeSession.id}/status`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'completado' })
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-role': user?.role || ''
+        },
+        body: JSON.stringify({ 
+          status: targetStatus,
+          auto_apply: isAdmin
+        })
       });
 
       if (res.ok) {
-        showNotification?.(`✓ Auditoría${activeSession?.mode === 'BLIND' ? ' a ciegas' : ''} finalizada. El reporte ha sido enviado a Administración para reconciliación.`, "success");
+        showNotification?.(
+          isAdmin 
+            ? "✓ Control físico completado y ajustado directamente en el inventario de productos."
+            : "✓ Conteo físico finalizado. Reporte enviado a Administración.", 
+          "success"
+        );
+        await fetchProducts();
         await fetchActiveSession();
         await fetchHistory();
+
+        safeDispatchEvent('inventory_operation', {
+          detail: {
+            type: 'physical_count',
+            id: activeSession.id,
+            user: user?.username || 'admin',
+            timestamp: new Date().toISOString()
+          }
+        });
       } else {
         showNotification?.("No se pudo completar la sesión de auditoría.", "error");
       }
@@ -514,10 +550,9 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
   });
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center p-0 md:p-4 z-45 animate-in fade-in duration-200">
       <div 
         id="physical-count-screen"
-        className="bg-slate-50 dark:bg-[#0c111e] w-full h-[100dvh] md:h-auto md:max-h-[92vh] md:max-w-5xl md:rounded-3xl border-0 md:border border-slate-200 dark:border-slate-800 flex flex-col shadow-2xl overflow-hidden"
+        className="fixed inset-0 z-[100] bg-slate-50 dark:bg-[#0c111e] w-screen h-screen flex flex-col overflow-hidden pointer-events-auto select-none animate-in fade-in duration-200"
       >
         
         {/* ENCABEZADO */}
@@ -527,13 +562,16 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
               <ShieldCheck size={22} />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="font-extrabold text-sm md:text-base text-slate-850 dark:text-white uppercase tracking-tight leading-none">
-                  Control Físico & Auditoría{activeSession?.mode === 'BLIND' ? ' a Ciegas' : ''}
+                  Control Físico & Auditoría
+                  {activeSession 
+                    ? (activeSession.mode === 'BLIND' ? (isAdmin ? ' (Vista Administrador)' : ' a Ciegas') : ' (Con Visibilidad)')
+                    : (isBlindMode ? ' a Ciegas' : ' (Con Visibilidad)')}
                 </h3>
                 {activeSession?.mode === 'BLIND' ? (
                   <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border border-indigo-500/20">
-                    A Ciegas (Sin Sesgo)
+                    {isAdmin ? 'A Ciegas (Visibilidad Admin Activada)' : 'A Ciegas (Sin Sesgo)'}
                   </span>
                 ) : (
                   <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border border-emerald-500/20">
@@ -543,7 +581,9 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1 leading-none">
                 {activeSession?.mode === 'BLIND' 
-                  ? 'El stock registrado se oculta al auditor durante el conteo para garantizar máxima integridad.' 
+                  ? (isAdmin 
+                      ? 'Supervisando auditoría a ciegas con cantidades esperadas visibles para el administrador.' 
+                      : 'El stock registrado se oculta al auditor durante el conteo para garantizar máxima integridad.')
                   : 'Modo administrativo: visualizando cantidades esperadas en sistema.'}
               </p>
             </div>
@@ -649,35 +689,39 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                       </select>
                     </div>
 
-                    {/* Modo a Ciegas Checkbox */}
-                    {!isAdmin && (
-                      <label className={`flex items-center gap-2.5 p-3 rounded-xl ${canPreviewQuantities ? 'bg-indigo-500/5 dark:bg-indigo-500/10 border border-indigo-500/20 cursor-pointer' : 'bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 opacity-70 cursor-not-allowed'}`}>
-                        <input
-                          type="checkbox"
-                          checked={isBlindMode}
-                          onChange={e => {
-                            if (canPreviewQuantities) {
-                              setIsBlindMode(e.target.checked);
-                            }
-                          }}
-                          disabled={!canPreviewQuantities}
-                          className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
-                        />
-                        <div className="text-left">
-                          <span className={`text-xs font-extrabold uppercase tracking-tight block ${canPreviewQuantities ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-600 dark:text-slate-400'}`}>
-                            Activar Control Físico a Ciegas
-                          </span>
-                          <span className="text-[9.5px] text-slate-500 dark:text-slate-400 leading-tight block mt-0.5">
-                            {!canPreviewQuantities 
-                              ? 'Modo ciego obligatorio. Solicita permisos para previsualizar cantidades.' 
-                              : 'Oculta el stock del sistema al auditor para prevenir conteos sesgados.'}
-                          </span>
-                        </div>
-                      </label>
-                    )}
+                    {/* Seleccion de Modo (Estándar vs Ciegas) */}
+                    <div className="flex flex-col gap-1.5 text-left">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Modo de Control Físico:</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsBlindMode(false)}
+                          className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition cursor-pointer ${
+                            !isBlindMode 
+                              ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-300 font-extrabold' 
+                              : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
+                          }`}
+                        >
+                          <span className="text-xs font-bold uppercase">Con Cantidades Reales</span>
+                          <span className="text-[9.5px] font-medium opacity-80">Muestra stock del sistema (Administración)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsBlindMode(true)}
+                          className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition cursor-pointer ${
+                            isBlindMode 
+                              ? 'bg-indigo-500/10 border-indigo-500 text-indigo-800 dark:text-indigo-300 font-extrabold' 
+                              : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
+                          }`}
+                        >
+                          <span className="text-xs font-bold uppercase">Auditoría a Ciegas</span>
+                          <span className="text-[9.5px] font-medium opacity-80">Oculta stock esperado (Trabajadores)</span>
+                        </button>
+                      </div>
+                    </div>
 
-                    {/* Advertencia de Segregación de Funciones */}
-                    {segregationWarning && (
+                    {/* Advertencia de Segregación de Funciones (Solo si aplica a trabajador) */}
+                    {segregationWarning && !isAdmin && (
                       <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex flex-col gap-2 text-left">
                         <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs font-extrabold">
                           <ShieldAlert size={16} className="shrink-0" />
@@ -686,31 +730,6 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                         <p className="text-[10px] text-slate-600 dark:text-slate-300 leading-relaxed font-medium">
                           {segregationWarning}
                         </p>
-                        
-                        {isAdmin && (
-                          <div className="mt-1 flex flex-col gap-2 pt-2 border-t border-amber-500/20">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={overrideSegregation}
-                                onChange={e => setOverrideSegregation(e.target.checked)}
-                                className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4"
-                              />
-                              <span className="text-[10.5px] font-bold text-amber-700 dark:text-amber-300">
-                                Autorizar auto-auditoría con permiso de Administrador
-                              </span>
-                            </label>
-                            {overrideSegregation && (
-                              <textarea
-                                placeholder="Escribe el motivo o justificación de esta excepción de auditoría..."
-                                value={overrideReason}
-                                onChange={e => setOverrideReason(e.target.value)}
-                                className="text-[11px] p-2 bg-white dark:bg-[#151f32] border border-amber-500/30 rounded-lg w-full text-slate-800 dark:text-white"
-                                rows={2}
-                              />
-                            )}
-                          </div>
-                        )}
                       </div>
                     )}
 
@@ -734,15 +753,17 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                   {!isAdmin ? (
                     /* TRABAJADOR: MENSAJE DE ESPERA */
                     <div className="bg-white dark:bg-[#11192e] p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col items-center text-center gap-5 w-full">
-                      <div className="p-4 bg-emerald-500/10 text-emerald-500 rounded-full">
+                      <div className={`p-4 rounded-full ${activeSession.mode === 'BLIND' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>
                         <CheckCircle size={44} />
                       </div>
                       <div>
                         <h4 className="font-extrabold text-base md:text-lg text-slate-850 dark:text-white uppercase tracking-tight">
-                          Conteo a Ciegas Enviado a Reconciliación
+                          {activeSession.mode === 'BLIND' ? 'Conteo a Ciegas Enviado a Reconciliación' : 'Auditoría Finalizada con Éxito'}
                         </h4>
                         <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium max-w-sm mx-auto leading-relaxed">
-                          La auditoría finalizó correctamente. Los resultados físicos se encuentran bajo revisión del Administrador o Propietario.
+                          {activeSession.mode === 'BLIND' 
+                            ? 'La auditoría finalizó correctamente. Los resultados físicos se encuentran bajo revisión del Administrador o Propietario.'
+                            : 'El conteo físico ha concluido y las cantidades ingresadas ya están aplicadas al inventario general.'}
                         </p>
                       </div>
 
@@ -915,7 +936,7 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                         </div>
                       </div>
 
-                      {/* Stat Grid (Sin mostrar discrepancias durante el conteo a ciegas) */}
+                      {/* Stat Grid */}
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 bg-slate-50 dark:bg-black/20 px-3.5 py-2 rounded-xl border border-slate-150/60 dark:border-slate-850">
                         <div>
                           <span className="text-[8px] font-black uppercase text-slate-400 block leading-none">Auditor</span>
@@ -988,6 +1009,18 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                       >
                         Verificados ({activeSummary.checkedItems})
                       </button>
+                      {activeSummary.hasAdminVisibility && (
+                        <button
+                          onClick={() => setActiveFilter('diferencias')}
+                          className={`px-3.5 py-1.5 rounded-xl text-[10px] uppercase font-black tracking-wider border cursor-pointer transition ${
+                            activeFilter === 'diferencias'
+                              ? 'bg-amber-600 text-white border-amber-600'
+                              : 'bg-white dark:bg-[#151f32] text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-900/50 hover:bg-amber-50'
+                          }`}
+                        >
+                          Diferencias ({activeSummary.productsWithDiff})
+                        </button>
+                      )}
                     </div>
 
                     <label className="flex items-center gap-2 text-[10.5px] font-black uppercase text-slate-500 dark:text-slate-400 cursor-pointer shrink-0">
@@ -1056,13 +1089,13 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                               )}
                             </div>
 
-                            {/* Control de entrada de Existencia Física (Sin mostrar stock esperado) */}
-                            <div className="flex items-center justify-between gap-4 bg-slate-50 dark:bg-black/20 p-3.5 rounded-xl border border-slate-150/60 dark:border-slate-850">
+                            {/* Control de entrada de Existencia Física (con visibilidad condicional) */}
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50 dark:bg-black/20 p-3.5 rounded-xl border border-slate-150/60 dark:border-slate-850">
                               <label className="text-[11px] font-black uppercase text-slate-700 dark:text-slate-300">
                                 Cantidad física en anaquel:
                               </label>
                               
-                              <div className="flex items-center gap-1.5 max-w-[200px] flex-1">
+                              <div className="flex items-center gap-1.5 w-full md:max-w-[200px] flex-1">
                                 <button
                                   type="button"
                                   disabled={activeSession.status === 'completado'}
@@ -1096,6 +1129,41 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                                 </button>
                               </div>
                             </div>
+
+                            {/* Mostrar el stock original y la diferencia en tiempo real en modo no ciego O si el usuario es Admin/Propietario */}
+                            {(activeSession.mode !== 'BLIND' || isAdmin || it.system_stock !== undefined) && it.system_stock !== undefined && (() => {
+                              const sysStock = it.adjusted_expected_quantity ?? it.system_stock ?? 0;
+                              const diff = (it.counted_stock ?? 0) - sysStock;
+                              const isCounted = it.is_checked === 1;
+
+                              return (
+                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-indigo-50/70 dark:bg-indigo-950/30 px-3.5 py-2.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50 gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-extrabold uppercase text-indigo-700 dark:text-indigo-400">Stock en sistema:</span>
+                                    <span className="text-xs font-mono font-black text-indigo-900 dark:text-indigo-200">{sysStock} pz</span>
+                                  </div>
+                                  
+                                  {isCounted && (
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400">Diferencia:</span>
+                                      {diff === 0 ? (
+                                        <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-mono text-[11px] font-black rounded-md border border-emerald-500/20">
+                                          0 pz (Sin diferencia)
+                                        </span>
+                                      ) : diff < 0 ? (
+                                        <span className="px-2 py-0.5 bg-rose-500/10 text-rose-700 dark:text-rose-400 font-mono text-[11px] font-black rounded-md border border-rose-500/20">
+                                          {diff} pz (Faltante)
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 font-mono text-[11px] font-black rounded-md border border-indigo-500/20">
+                                          +{diff} pz (Sobrante)
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
 
                             {/* Observación / Nota del Auditor */}
                             <div className="flex flex-col gap-1 select-none">
@@ -1272,7 +1340,7 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                                 <td className="p-3 uppercase text-slate-500">{h.store_name || 'Almacén Principal'}</td>
                                 <td className="p-3 text-center">
                                   <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 py-0.5 px-2 text-[8.5px] font-black uppercase rounded-lg border border-indigo-500/20">
-                                    {h.mode || 'BLIND'}
+                                    {h.mode === 'BLIND' ? 'A Ciegas' : (h.mode === 'STANDARD' ? 'Administrativo' : h.mode)}
                                   </span>
                                 </td>
                                 <td className="p-3 text-center">
@@ -1367,6 +1435,5 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
         </div>
 
       </div>
-    </div>
   );
 }

@@ -3072,44 +3072,116 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   app.post("/api/sales/refund", (req, res) => {
     const { sale_id, item_refunds, user_id, username } = req.body;
     try {
+      if (!sale_id || !Array.isArray(item_refunds) || item_refunds.length === 0) {
+        return res.status(400).json({ error: "Datos de devolución inválidos." });
+      }
+
       const stockRestore = db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
       const auditPayloads: any[] = [];
 
       const refundTrx = db.transaction(() => {
         // Find original sale to know the seller and total
         const originalSale = db.prepare('SELECT user_id, total, payment_method, currency FROM sales WHERE id = ?').get(sale_id) as any;
+        if (!originalSale) {
+          throw new Error(`El ticket #${sale_id} no fue encontrado.`);
+        }
+
+        let totalRefundAmount = 0;
+        const reconciledItems: any[] = [];
 
         for (const item of item_refunds) {
-          const prod = db.prepare('SELECT name, sku, price_cost, stock FROM products WHERE id = ?').get(item.product_id) as any;
-          const pName = prod?.name || 'Producto Desconocido';
-          const pSku = prod?.sku || '';
-          const pCost = prod?.price_cost || 0;
-          const beforeStock = prod?.stock || 0;
+          // Find matching sale_item row by sale_item_id or product_id
+          let saleItem: any = null;
+          if (item.sale_item_id) {
+            saleItem = db.prepare('SELECT id, product_id, quantity, price, product_name_snapshot, product_sku_snapshot FROM sale_items WHERE id = ? AND sale_id = ?').get(item.sale_item_id, sale_id);
+          }
+          if (!saleItem && item.product_id) {
+            saleItem = db.prepare('SELECT id, product_id, quantity, price, product_name_snapshot, product_sku_snapshot FROM sale_items WHERE sale_id = ? AND product_id = ? AND quantity > 0').get(sale_id, item.product_id);
+          }
 
-          stockRestore.run(item.quantity, item.product_id);
-          db.prepare('UPDATE sale_items SET quantity = MAX(0, quantity - ?) WHERE sale_id = ? AND product_id = ?')
-            .run(item.quantity, sale_id, item.product_id);
+          if (!saleItem || saleItem.quantity <= 0) {
+            console.warn(`[Refund Warning] Skipping item refund for product_id ${item.product_id} / sale_item_id ${item.sale_item_id}: item not found or remaining quantity is 0.`);
+            continue;
+          }
 
-          const afterStock = beforeStock + item.quantity;
+          const targetProductId = saleItem.product_id;
+          const cappedQty = Math.min(Math.max(0, Number(item.quantity || 0)), saleItem.quantity);
+          if (cappedQty <= 0) continue;
+
+          // Fetch product details to update master stock
+          let pName = saleItem.product_name_snapshot || 'Producto Desconocido';
+          let pSku = saleItem.product_sku_snapshot || '';
+          let pCost = 0;
+          let beforeStock = 0;
+
+          if (targetProductId) {
+            const prod = db.prepare('SELECT name, sku, price_cost, stock FROM products WHERE id = ?').get(targetProductId) as any;
+            if (prod) {
+              pName = prod.name || pName;
+              pSku = prod.sku || pSku;
+              pCost = prod.price_cost || 0;
+              beforeStock = prod.stock || 0;
+
+              // Restore stock in master inventory
+              stockRestore.run(cappedQty, targetProductId);
+            }
+          }
+
+          const afterStock = beforeStock + cappedQty;
+
+          // Deduct returned quantity from sale_items
+          db.prepare('UPDATE sale_items SET quantity = quantity - ? WHERE id = ?').run(cappedQty, saleItem.id);
+
+          // Atomic Validation Step: Verify post-return inventory state and balance against original order record
+          if (targetProductId) {
+            const postStockProd = db.prepare('SELECT stock FROM products WHERE id = ?').get(targetProductId) as any;
+            const actualStockAfter = postStockProd ? postStockProd.stock : 0;
+            if (actualStockAfter !== afterStock) {
+              throw new Error(`Inconsistencia atómica en el inventario del producto #${targetProductId}. Esperado: ${afterStock}, Encontrado: ${actualStockAfter}`);
+            }
+
+            const updatedSaleItem = db.prepare('SELECT quantity FROM sale_items WHERE id = ?').get(saleItem.id) as any;
+            const expectedRemaining = saleItem.quantity - cappedQty;
+            if (!updatedSaleItem || updatedSaleItem.quantity !== expectedRemaining) {
+              throw new Error(`Desbalance de inventario en el registro de orden #${sale_id} para el ítem #${saleItem.id}.`);
+            }
+
+            reconciledItems.push({
+              product_id: targetProductId,
+              product_name: pName,
+              before_stock: beforeStock,
+              returned_quantity: cappedQty,
+              after_stock: actualStockAfter,
+              order_item_remaining: updatedSaleItem.quantity,
+              reconciled: true
+            });
+          }
+
+          // Calculate total refund value based on returned items and unit prices
+          const itemRefundValue = cappedQty * (saleItem.price || 0);
+          totalRefundAmount += itemRefundValue;
 
           // Log returning item to inventory audit
           const auditUser = (req as any).auditUser || {};
           const normUserId = auditUser.userId || user_id || 1;
           const normUsername = auditUser.userName || username || 'admin';
-          db.prepare(`
-            INSERT INTO inventory_audit_logs 
-            (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
-            VALUES (?, ?, ?, 'ingreso_devolucion', ?, ?, ?, ?, ?, ?, ?)
-          `).run(item.product_id, pName, pSku, item.quantity, pCost, normUserId, normUsername, `Devolución #${sale_id}`, 'Reincorporación por devolución física', getBoliviaISOString());
 
-          // Flag if there's an active inventory physical session that includes this product
-          db.prepare(`
-            UPDATE inventory_count_items
-            SET had_movements_during_count = 1
-            WHERE product_id = ? AND inventory_count_id IN (
-              SELECT id FROM inventory_counts WHERE status = 'en_progreso'
-            )
-          `).run(item.product_id);
+          if (targetProductId) {
+            db.prepare(`
+              INSERT INTO inventory_audit_logs 
+              (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
+              VALUES (?, ?, ?, 'ingreso_devolucion', ?, ?, ?, ?, ?, ?, ?)
+            `).run(targetProductId, pName, pSku, cappedQty, pCost, normUserId, normUsername, `Devolución #${sale_id}`, 'Reincorporación por devolución física', getBoliviaISOString());
+
+            // Flag if there's an active inventory physical session that includes this product
+            db.prepare(`
+              UPDATE inventory_count_items
+              SET had_movements_during_count = 1
+              WHERE product_id = ? AND inventory_count_id IN (
+                SELECT id FROM inventory_counts WHERE status = 'en_progreso'
+              )
+            `).run(targetProductId);
+          }
 
           auditPayloads.push({
             eventType: 'ingreso_devolucion',
@@ -3118,78 +3190,71 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
             action: 'Reincorporación de mercadería por devolución',
             severity: 'info',
             entityType: 'producto',
-            entityId: item.product_id,
+            entityId: targetProductId || sale_id,
             entityName: pName,
             userId: user_id || 1,
             userName: username || 'admin',
             userRole: 'vendedor',
             quantityBefore: beforeStock,
-            quantityChanged: item.quantity,
+            quantityChanged: cappedQty,
             quantityAfter: afterStock,
             priceAfter: pCost,
             reason: `Devolución de venta #${sale_id}`,
             relatedTicket: `Devolución #${sale_id}`,
-            relatedProductId: item.product_id,
+            relatedProductId: targetProductId,
             relatedSaleId: sale_id,
             status: 'success'
           });
         }
-        
-        const sumResult = db.prepare('SELECT SUM(quantity * price) as sumTotal FROM sale_items WHERE sale_id = ?').get(sale_id) as any;
-        const newTotal = sumResult?.sumTotal || 0;
-        
+
+        // Update sale total and record cash movement
         let refMovId: any = null;
         let refAccId: any = null;
-        
-        if (originalSale) {
-          const refundAmount = originalSale.total - newTotal; // amount being returned
-          if (refundAmount > 0) {
-            const sId = originalSale.user_id || 1;
-            const sNameRow = db.prepare('SELECT username FROM users WHERE id = ?').get(sId) as any;
-            const sName = sNameRow?.username || 'Cajero';
 
-            // Ensure cash account exists
-            db.prepare(`
-              INSERT OR IGNORE INTO cash_accounts (seller_id, seller_username, current_balance)
-              VALUES (?, ?, 0.0)
-            `).run(sId, sName);
+        if (totalRefundAmount > 0) {
+          const sId = originalSale.user_id || 1;
+          const sNameRow = db.prepare('SELECT username FROM users WHERE id = ?').get(sId) as any;
+          const sName = sNameRow?.username || 'Cajero';
 
-            // Record refund movement
-            const movResult = db.prepare(`
-              INSERT INTO cash_movements (seller_id, sale_id, type, amount, currency, payment_method, status, notes)
-              VALUES (?, ?, 'devolucion', ?, ?, ?, 'pendiente', ?)
-            `).run(
-              sId,
-              sale_id,
-              -refundAmount,
-              originalSale.currency || 'BOB',
-              originalSale.payment_method || 'Efectivo',
-              `Reembolso por devolución de venta #${sale_id}`
-            );
-            refMovId = movResult.lastInsertRowid;
+          // Ensure cash account exists
+          db.prepare(`
+            INSERT OR IGNORE INTO cash_accounts (seller_id, seller_username, current_balance)
+            VALUES (?, ?, 0.0)
+          `).run(sId, sName);
 
-            // Update cash balance
-            db.prepare(`
-              UPDATE cash_accounts
-              SET current_balance = MAX(0, current_balance - ?), updated_at = CURRENT_TIMESTAMP
-              WHERE seller_id = ?
-            `).run(refundAmount, sId);
+          // Record refund movement
+          const movResult = db.prepare(`
+            INSERT INTO cash_movements (seller_id, sale_id, type, amount, currency, payment_method, status, notes)
+            VALUES (?, ?, 'devolucion', ?, ?, ?, 'pendiente', ?)
+          `).run(
+            sId,
+            sale_id,
+            -totalRefundAmount,
+            originalSale.currency || 'BOB',
+            originalSale.payment_method || 'Efectivo',
+            `Reembolso por devolución de venta #${sale_id}`
+          );
+          refMovId = movResult.lastInsertRowid;
 
-            const accRow = db.prepare('SELECT id FROM cash_accounts WHERE seller_id = ?').get(sId) as any;
-            refAccId = accRow?.id;
-          }
+          // Update seller's cash balance
+          db.prepare(`
+            UPDATE cash_accounts
+            SET current_balance = MAX(0, current_balance - ?), updated_at = CURRENT_TIMESTAMP
+            WHERE seller_id = ?
+          `).run(totalRefundAmount, sId);
+
+          const accRow = db.prepare('SELECT id FROM cash_accounts WHERE seller_id = ?').get(sId) as any;
+          refAccId = accRow?.id;
+
+          // Update sale total (do NOT delete the sale even if total reaches 0)
+          const newSaleTotal = Math.max(0, originalSale.total - totalRefundAmount);
+          db.prepare('UPDATE sales SET total = ? WHERE id = ?').run(newSaleTotal, sale_id);
         }
 
-        if (newTotal === 0) {
-          db.prepare('DELETE FROM sales WHERE id = ?').run(sale_id);
-          db.prepare('DELETE FROM sale_items WHERE sale_id = ?').run(sale_id);
-        } else {
-          db.prepare('UPDATE sales SET total = ? WHERE id = ?').run(newTotal, sale_id);
-        }
-        return { refAccId, refMovId };
+        return { refAccId, refMovId, totalRefundAmount, reconciledItems };
       });
 
-      const { refAccId, refMovId } = refundTrx();
+      const { refAccId, refMovId, totalRefundAmount, reconciledItems } = refundTrx();
 
       // Write advanced audit logs for each refunded product item
       const auditUser = (req as any).auditUser || {};
@@ -3233,7 +3298,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         cash_accounts: refAccId ? [refAccId] : [],
         cash_movements: refMovId ? [refMovId] : []
       });
-      res.json({ success: true });
+      res.json({ success: true, totalRefundAmount, inventoryReconciliation: reconciledItems });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -4955,7 +5020,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   app.get("/api/inventory-counts", (req, res) => {
     try {
       const userRole = req.headers['x-user-role'] || req.query.user_role;
-      const isAdmin = userRole === 'admin' || userRole === 'administrador';
+      const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe';
       let counts = db.prepare('SELECT * FROM inventory_counts ORDER BY started_at DESC').all() as any[];
 
       if (!isAdmin) {
@@ -4971,7 +5036,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
-  // Crear una nueva sesión de conteo físico a ciegas (Copia el stock esperado como snapshot interno)
+  // Crear una nueva sesión de conteo físico (Copia el stock esperado como snapshot interno)
   app.post("/api/inventory-counts", (req, res) => {
     const { 
       user_id, 
@@ -4986,6 +5051,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     } = req.body;
 
     try {
+      const userRole = req.headers['x-user-role'] || req.body.user_role || '';
+      const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe' || username === 'admin';
+
       const activeSession = db.prepare("SELECT id FROM inventory_counts WHERE status IN ('en_progreso', 'pausado')").get() as any;
       if (activeSession) {
         return res.status(400).json({ error: `Ya existe una sesión de conteo activa (#${activeSession.id}). Por favor, finalízala o paúsala antes de iniciar otra.` });
@@ -4995,14 +5063,15 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       const store = (store_name || 'Almacén Principal').trim();
 
       // --- VALIDACIÓN DE SEGREGACIÓN DE FUNCIONES ---
-      // Si el auditor es el operador principal del sistema/caja y no hay autorización explícita
-      const isOperatorSelfAuditing = (username && assignedAuditor.toLowerCase().includes(username.toLowerCase())) || assignedAuditor.toLowerCase().includes('cajero');
-      
-      if (isOperatorSelfAuditing && !override_segregation) {
-        return res.status(400).json({ 
-          segregation_warning: true,
-          error: "Advertencia de Segregación de Funciones: El auditor asignado es el operador principal de caja/almacén. Para autorizar una auto-auditoría, un Administrador o Propietario debe autorizar esta excepción con su justificación." 
-        });
+      // Solo aplica a trabajadores/empleados. Los Administradores/Propietarios NO requieren justificación ni son bloqueados.
+      if (!isAdmin) {
+        const isOperatorSelfAuditing = (username && assignedAuditor.toLowerCase().includes(username.toLowerCase())) || assignedAuditor.toLowerCase().includes('cajero');
+        if (isOperatorSelfAuditing && !override_segregation) {
+          return res.status(400).json({ 
+            segregation_warning: true,
+            error: "Advertencia de Segregación de Funciones: El auditor asignado es el operador principal de caja/almacén. Se requiere autorización de excepción para el trabajador." 
+          });
+        }
       }
 
       let products: any[] = [];
@@ -5016,6 +5085,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         return res.status(400).json({ error: "No hay productos disponibles para auditar en el alcance seleccionado." });
       }
 
+      // Si es admin, por defecto es modo STANDARD (Con Visibilidad de Stock), a menos que especifique BLIND explícitamente
+      const finalMode = mode ? mode : (isAdmin ? 'STANDARD' : 'BLIND');
+
       const transaction = db.transaction(() => {
         const result = db.prepare(`
           INSERT INTO inventory_counts (
@@ -5028,8 +5100,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           username || 'admin', 
           assignedAuditor, 
           store, 
-          notes || 'Control físico a ciegas', 
-          mode || 'BLIND', 
+          notes || (finalMode === 'STANDARD' ? 'Control físico de inventario' : 'Auditoría a ciegas'), 
+          finalMode, 
           override_segregation ? 1 : 0, 
           override_reason || null, 
           products.length, 
@@ -5054,43 +5126,41 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
       const countId = transaction();
 
-      // Audit log creation with segregation override tracking
+      // Audit log creation
       try {
         const auditUser = (req as any).auditUser || {};
         insertSystemAuditLog({
           eventType: 'INVENTORY_COUNT_STARTED',
           category: 'INVENTORY_COUNT',
           module: 'CONTROL_FISICO',
-          action: 'Inicio de Conteo Físico a Ciegas',
-          severity: override_segregation ? 'WARNING' : 'INFO',
+          action: `Inicio de Control Físico (${finalMode === 'STANDARD' ? 'Con Visibilidad' : 'A Ciegas'})`,
+          severity: 'INFO',
           entityType: 'conteo_fisico',
           entityId: countId,
           entityName: `Control Físico #${countId} (${store})`,
           userId: user_id || auditUser.userId || 1,
           userName: username || auditUser.userName || 'admin',
-          reason: override_segregation 
-            ? `Excepción de Segregación Autorizada: ${override_reason || 'Sin justificación'}`
-            : (notes || 'Conteo físico de inventario iniciado.'),
-          afterData: { total_products: products.length, store, auditor: assignedAuditor, mode: mode || 'BLIND', override_segregation: !!override_segregation },
+          reason: notes || 'Conteo físico de inventario iniciado.',
+          afterData: { total_products: products.length, store, auditor: assignedAuditor, mode: finalMode },
           status: 'success'
         });
       } catch (auditErr: any) {
         console.warn("[Audit Error] Failed to log count start:", auditErr.message);
       }
 
-      res.json({ success: true, countId });
+      res.json({ success: true, countId, mode: finalMode });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
   // Obtener los detalles de una sesión de conteo físico e ítems
-  // PROTECCIÓN DE AUDITORÍA A CIEGAS: Sanitiza los datos devueltos al auditor
+  // PROTECCIÓN DE AUDITORÍA A CIEGAS: Sanitiza los datos devueltos solo al auditor cuando la sesión está en modo BLIND
   app.get("/api/inventory-counts/:id", (req, res) => {
     const { id } = req.params;
     try {
       const userRole = req.headers['x-user-role'] || req.query.user_role;
-      const isAdmin = userRole === 'admin' || userRole === 'administrador';
+      const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe';
       const isAuditorView = req.query.is_auditor_view === 'true';
 
       const count = db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(id) as any;
@@ -5100,8 +5170,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
       let items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
 
-      // Si la sesión está en progreso o si quien consulta es el auditor, OCULTAR el stock esperado del sistema y las diferencias
-      const hideSystemStock = (!isAdmin || isAuditorView) && count.status !== 'cerrado' && count.status !== 'finalizado' && count.status !== 'completado';
+      // Ocultar stock del sistema SOLO si es una sesión MODO A CIEGAS y quien consulta no es un Administrador/Propietario (o vista explicita de auditor)
+      const isBlindSession = count.mode === 'BLIND';
+      const hideSystemStock = isBlindSession && (!isAdmin || isAuditorView) && count.status !== 'cerrado' && count.status !== 'finalizado' && count.status !== 'completado';
 
       if (hideSystemStock) {
         items = items.map((it: any) => ({
@@ -5168,20 +5239,20 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     const { physical_quantity, notes, status: bodyStatus } = req.body;
     try {
       const count = db.prepare('SELECT status FROM inventory_counts WHERE id = ?').get(id) as any;
-      if (!count || (count.status !== 'en_progreso' && count.status !== 'pausado')) {
+      if (!count || count.status === 'cerrado' || count.status === 'cancelado') {
         return res.status(400).json({ error: "No se puede modificar un conteo que ya ha sido cerrado o cancelado." });
       }
 
-      const item = db.prepare('SELECT product_id, product_name, expected_quantity FROM inventory_count_items WHERE id = ?').get(itemId) as any;
+      const item = db.prepare('SELECT product_id, product_name, expected_quantity, expected_quantity_snapshot FROM inventory_count_items WHERE id = ?').get(itemId) as any;
       if (!item) {
         return res.status(404).json({ error: "Artículo de conteo no encontrado." });
       }
 
-      const physical = Math.max(0, Number(physical_quantity));
-      const expected = item.expected_quantity;
+      const physical = Math.max(0, Number(physical_quantity || 0));
+      const expected = item.expected_quantity_snapshot ?? item.expected_quantity ?? 0;
       const difference = physical - expected;
       
-      let status = bodyStatus || (difference === 0 ? 'correcto' : 'diferencia');
+      let status = bodyStatus === 'pendiente' ? 'pendiente' : (difference === 0 ? 'correcto' : 'diferencia');
 
       db.prepare(`
         UPDATE inventory_count_items
@@ -5273,11 +5344,57 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   // Actualizar el estado general de una sesión de conteo ('pausado', 'finalizado', 'cancelado')
   app.put("/api/inventory-counts/:id/status", (req, res) => {
     const { id } = req.params;
-    const { status, notes } = req.body;
+    const { status, notes, auto_apply } = req.body;
     try {
-      const allowed = ['pausado', 'finalizado', 'cancelado', 'en_progreso', 'completado'];
+      const allowed = ['pausado', 'finalizado', 'cancelado', 'en_progreso', 'completado', 'cerrado'];
       if (!allowed.includes(status)) {
         return res.status(400).json({ error: "Estado no permitido." });
+      }
+
+      const userRole = req.headers['x-user-role'] || req.query.user_role || '';
+      const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe';
+
+      // Si se solicita aplicar directamente (o si es Administrador concluyendo un conteo directo)
+      if ((status === 'completado' || status === 'finalizado' || status === 'cerrado') && (auto_apply || isAdmin)) {
+        const items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
+        
+        const transaction = db.transaction(() => {
+          for (const item of items) {
+            const exp = item.expected_quantity_snapshot ?? item.expected_quantity ?? 0;
+            const physical = item.physical_quantity ?? 0;
+            const diff = physical - exp;
+
+            if (diff !== 0) {
+              const p = db.prepare('SELECT stock, price_cost, name, sku FROM products WHERE id = ?').get(item.product_id) as any;
+              if (p) {
+                const oldStock = p.stock;
+                const newStock = physical;
+
+                db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(newStock, item.product_id);
+
+                const logType = diff > 0 ? 'ajuste_incremento' : 'ajuste_decremento';
+                const absQty = Math.abs(diff);
+
+                db.prepare(`
+                  INSERT INTO inventory_audit_logs 
+                  (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                  item.product_id, p.name, p.sku, logType, absQty, p.price_cost || 0,
+                  1, 'admin', `Control Físico #${id}`,
+                  `Ajuste directo por control físico (De ${oldStock} a ${newStock} pz).`,
+                  getBoliviaISOString()
+                );
+              }
+            }
+          }
+
+          db.prepare(`UPDATE inventory_counts SET status = 'cerrado', completed_at = CURRENT_TIMESTAMP, approved_at = CURRENT_TIMESTAMP, approved_by_username = 'admin', notes = ? WHERE id = ?`)
+            .run(notes || 'Control físico completado y concilado directamente', id);
+        });
+
+        transaction();
+        return res.json({ success: true, applied: true });
       }
 
       const updateData: any[] = [status];
@@ -5317,8 +5434,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           entityId: id,
           entityName: `Sesión de control #${id}`,
           userId: auditUser.userId || 1,
-          userName: auditUser.userName || 'cajero',
-          userRole: auditUser.userRole || 'cajero',
+          userName: auditUser.userName || 'admin',
+          userRole: auditUser.userRole || 'admin',
           reason: notes || `Sesión de conteo físico cambiada a estado: ${status}`,
           afterData: { status },
           status: 'success'

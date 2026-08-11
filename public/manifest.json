@@ -1,0 +1,24 @@
+{
+  "name": "Digital Store - AI-Powered Point of Sale",
+  "short_name": "Digital Store",
+  "description": "Advanced Point of Sale (POS) system integrated with Gemini Live for natural voice commands, automated checkout, real-time metrics, inventory alerts, and instant receipt downloads.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070a10",
+  "theme_color": "#2563eb",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

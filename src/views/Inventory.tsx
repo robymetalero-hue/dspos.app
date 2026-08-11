@@ -53,20 +53,20 @@ const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue
     };
 
     return (
-        <div className="relative w-full md:max-w-sm shrink-0">
-            <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 pointer-events-none">
+        <div className="relative w-full md:w-80 lg:w-96 flex-1 min-w-[240px] shrink-0">
+            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none">
                 {isSearching ? (
-                    <Loader2 size={14} className="animate-spin text-blue-500" />
+                    <Loader2 size={16} className="animate-spin text-blue-500" />
                 ) : (
-                    <Search size={14} />
+                    <Search size={16} />
                 )}
             </span>
             <input 
                 ref={inputRef}
                 type="text" 
                 id="search-query-input"
-                placeholder="Buscar artículo por nombre, SKU..." 
-                className="pl-9 pr-8 py-2.5 w-full bg-slate-55 dark:bg-black/15 border border-slate-100 dark:border-slate-850 rounded-2xl focus:outline-none focus:border-blue-500 dark:text-white text-xs transition placeholder-slate-400 font-semibold"
+                placeholder="Buscar por nombre, SKU, #ID, marca o categoría..." 
+                className="pl-10 pr-9 py-2.5 w-full bg-slate-50 dark:bg-black/15 border border-slate-200 dark:border-slate-850 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:text-white text-xs sm:text-sm transition placeholder-slate-400 font-semibold shadow-inner"
                 value={localVal}
                 onChange={handleChange}
                 onKeyDown={(e) => {
@@ -83,7 +83,7 @@ const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue
                     onClick={handleClear}
                     className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
-                    <X size={14} />
+                    <X size={15} />
                 </button>
             )}
         </div>
@@ -120,6 +120,10 @@ export default function Inventory() {
         }, 150);
         return () => clearTimeout(timer);
     }, [searchQuery]);
+
+    useEffect(() => {
+        fetchProducts(debouncedSearchQuery);
+    }, [debouncedSearchQuery]);
 
     // Form states
     const [name, setName] = useState("");

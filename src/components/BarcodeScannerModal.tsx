@@ -90,15 +90,17 @@ export default function BarcodeScannerModal({ isOpen, onClose, products, addToCa
         lastScanTimeRef.current = now;
         setLastScannedCode(cleanSku);
 
-        // Find matches in inventory (SKUs can be lowercase/uppercase mix, check both)
+        // Find matches in inventory (SKUs/IDs can be lowercase/uppercase mix or # prefixed)
+        const rawClean = cleanSku.replace(/^#/, '').toLowerCase();
         const cleanCode = cleanSku.toLowerCase();
         const normCode = cleanCode.replace(/^0+/, '');
 
         const match = products.find(p => {
+            if (String(p.id) === rawClean || String(p.id) === normCode) return true;
             if (!p.sku) return false;
             const cleanSkuStr = p.sku.trim().toLowerCase();
             const normSku = cleanSkuStr.replace(/^0+/, '');
-            return cleanSkuStr === cleanCode || normSku === normCode || normSku === cleanCode || cleanSkuStr === normCode;
+            return cleanSkuStr === cleanCode || normSku === normCode || normSku === cleanCode || cleanSkuStr === normCode || cleanSkuStr === rawClean;
         });
 
         const historyItem = {

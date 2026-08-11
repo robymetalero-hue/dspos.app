@@ -5,17 +5,21 @@ export function normalizeSearchText(text: string): string {
 
 export function calculateSearchScore(product: any, query: string): number {
     let score = 0;
-    const q = normalizeSearchText(query);
+    const cleanQuery = query.replace(/^#/, '').trim();
+    const q = normalizeSearchText(cleanQuery);
     if (!q) return 0;
     
+    const idStr = String(product.id || "");
     const name = normalizeSearchText(product.name || "");
     const sku = normalizeSearchText(product.sku || "");
     const barcode = normalizeSearchText(product.barcode || "");
     
-    const queryTerms = q.split(" ");
+    const queryTerms = q.split(" ").filter(Boolean);
     const nameWords = name.split(" ");
     
-    if (sku === q || barcode === q) {
+    if (idStr === q) {
+        score += 1100;
+    } else if (sku === q || barcode === q) {
         score += 1000;
     } else if (sku.startsWith(q) || barcode.startsWith(q)) {
         score += 800;
@@ -32,7 +36,7 @@ export function calculateSearchScore(product: any, query: string): number {
     }
     
     if (queryTerms.length > 1) {
-        if (queryTerms.every(term => name.includes(term) || sku.includes(term))) {
+        if (queryTerms.every(term => name.includes(term) || sku.includes(term) || idStr.includes(term))) {
             score += 500;
         }
     } else {
@@ -40,7 +44,7 @@ export function calculateSearchScore(product: any, query: string): number {
             score += 500;
         } else if (name.includes(q)) {
             score += 100;
-        } else if (sku.includes(q)) {
+        } else if (sku.includes(q) || idStr.includes(q)) {
             score += 100;
         }
     }
@@ -51,11 +55,14 @@ export function calculateSearchScore(product: any, query: string): number {
 export function filterAndRankProducts<T extends Record<string, any>>(products: T[], query: string): T[] {
     if (!query || !query.trim()) return products;
     
-    const q = normalizeSearchText(query);
-    const searchTerms = q.split(" ");
+    const cleanQuery = query.replace(/^#/, '').trim();
+    const q = normalizeSearchText(cleanQuery);
+    const searchTerms = q.split(" ").filter(Boolean);
+    if (searchTerms.length === 0) return products;
     
     const filtered = products.filter(p => {
-        const searchableText = `${normalizeSearchText(p.name)} ${normalizeSearchText(p.sku || "")} ${normalizeSearchText(p.barcode || "")} ${normalizeSearchText(p.category || "")}`;
+        const idStr = String(p.id || "");
+        const searchableText = `${idStr} ${normalizeSearchText(p.name)} ${normalizeSearchText(p.sku || "")} ${normalizeSearchText(p.barcode || "")} ${normalizeSearchText(p.category || "")}`;
         return searchTerms.every(term => searchableText.includes(term));
     });
     

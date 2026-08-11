@@ -492,8 +492,10 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
 
   // Filter items in active session
   const filteredItems = sessionItems.filter(it => {
-    const matchesSearch = (it.product_name || '').toLowerCase().includes(itemSearch.toLowerCase()) || 
-                          (it.product_sku || '').toLowerCase().includes(itemSearch.toLowerCase());
+    const cleanQuery = itemSearch.toLowerCase().replace(/^#/, '').trim();
+    const searchTerms = cleanQuery.split(/\s+/).filter(Boolean);
+    const searchableText = `${it.product_id || ''} ${(it.product_name || '').toLowerCase()} ${(it.product_sku || '').toLowerCase()} ${(it.category || '').toLowerCase()}`;
+    const matchesSearch = searchTerms.length === 0 || searchTerms.every(term => searchableText.includes(term));
     
     let matchesFilter = true;
     if (activeFilter === 'pendientes') {
@@ -934,7 +936,7 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
                     <div className="relative w-full md:max-w-xs">
                       <input
                         type="text"
-                        placeholder="Buscar por producto o SKU..."
+                        placeholder="Buscar por artículo, SKU, #ID o categoría..."
                         onChange={e => setItemSearch(e.target.value)}
                         className="pl-9 pr-4 py-2 w-full bg-white dark:bg-[#151f32] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 dark:text-white text-xs font-semibold h-10"
                         autoComplete="off"

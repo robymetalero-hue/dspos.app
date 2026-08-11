@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
+import { filterAndRankProducts } from '../lib/searchUtils';
 import { 
     Search, Calendar, User, Phone, Receipt, CircleDollarSign, CheckCircle2, 
     AlertCircle, History, Wallet, X, ArrowLeftRight, Landmark, Tag, 
@@ -1978,7 +1979,7 @@ export default function CuentasPorCobrarView() {
                                         <Search size={12} className="absolute left-2.5 top-2.5 text-slate-400" />
                                         <input 
                                             type="text"
-                                            placeholder="Buscar producto para agregar..."
+                                            placeholder="Buscar por artículo, SKU, #ID, marca o categoría..."
                                             value={productSearchQuery}
                                             onChange={(e) => setProductSearchQuery(e.target.value)}
                                             className="pl-8 pr-3 py-1.5 w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-slate-850 rounded-xl text-[11px] font-bold focus:outline-none"
@@ -1986,15 +1987,8 @@ export default function CuentasPorCobrarView() {
                                     </div>
 
                                     <div className="flex-grow overflow-y-auto max-h-[300px] flex flex-col gap-1.5 pr-1">
-                                        {productList
-                                            .filter(p => {
-                                                const query = productSearchQuery.toLowerCase().trim();
-                                                if (!query) return true;
-                                                const searchTerms = query.split(/\s+/);
-                                                const searchableText = `${p.name} ${p.sku || ""}`.toLowerCase();
-                                                return searchTerms.every(term => searchableText.includes(term));
-                                            })
-                                            .slice(0, 20)
+                                        {filterAndRankProducts(productList, productSearchQuery)
+                                            .slice(0, 25)
                                             .map((prod) => (
                                                 <div 
                                                     key={prod.id} 

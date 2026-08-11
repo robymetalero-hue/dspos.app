@@ -80,20 +80,20 @@ const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSe
     };
 
     return (
-        <div className="relative flex-1 min-w-[120px]">
-            <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-400 pointer-events-none">
+        <div className="relative flex-1 w-full min-w-[200px] sm:min-w-[280px]">
+            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none">
                 {isSearching ? (
-                    <Loader2 size={13} className="animate-spin text-indigo-500" />
+                    <Loader2 size={16} className="animate-spin text-indigo-500" />
                 ) : (
-                    <Search size={13} />
+                    <Search size={16} />
                 )}
             </span>
             <input 
                 ref={inputRef}
                 type="text" 
                 id="search-input"
-                placeholder="Buscar artículo o sku..." 
-                className="pl-9 pr-8 py-1.5 w-full bg-slate-50/50 dark:bg-black/10 border border-slate-200 dark:border-slate-850 rounded-xl focus:outline-none focus:border-indigo-500 dark:text-white text-[11.5px] transition placeholder-slate-400 font-semibold"
+                placeholder="Buscar por artículo, SKU, #ID, marca o categoría..." 
+                className="pl-10 pr-9 py-2.5 w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:text-white text-xs sm:text-sm transition placeholder-slate-400 font-semibold shadow-inner"
                 value={localVal}
                 onChange={handleChange}
                 onKeyDown={(e) => {
@@ -108,9 +108,9 @@ const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSe
                 <button
                     type="button"
                     onClick={handleClear}
-                    className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
-                    <X size={12} />
+                    <X size={15} />
                 </button>
             )}
         </div>
@@ -186,6 +186,10 @@ export default function POS() {
         }, 150);
         return () => clearTimeout(timer);
     }, [search]);
+
+    useEffect(() => {
+        fetchProducts(debouncedSearch);
+    }, [debouncedSearch]);
 
     const [isScannerOpen, setIsScannerOpen] = useState(false);
     const [selectedCategory, setSelectedCategory] = useState("Todos");
@@ -2638,8 +2642,8 @@ export default function POS() {
                     </div>
 
                     {/* Search & Categories bar */}
-                    <div className="flex flex-col lg:flex-row gap-2.5 items-center justify-between bg-white dark:bg-[#0c111e] p-2 lg:p-3 rounded-2xl lg:rounded-3xl border border-slate-200/60 dark:border-slate-850 select-none shrink-0">
-                        <div className="flex gap-2 w-full lg:w-[65%] items-center shrink-0">
+                    <div className="flex flex-col lg:flex-row gap-3 items-center justify-between bg-white dark:bg-[#0c111e] p-2.5 lg:p-3.5 rounded-2xl lg:rounded-3xl border border-slate-200/60 dark:border-slate-850 select-none shrink-0 shadow-xs">
+                        <div className="flex gap-2.5 w-full lg:w-[50%] xl:w-[55%] items-center shrink-0">
                             <POSSearchInput 
                                 initialValue={search} 
                                 onSearchChange={(val) => setSearch(val)} 
@@ -2654,15 +2658,15 @@ export default function POS() {
                             <button 
                                 type="button"
                                 onClick={() => setIsScannerOpen(true)}
-                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl flex items-center gap-1.5 font-bold text-xs transition duration-200 hover:scale-[1.01] active:scale-95 whitespace-nowrap cursor-pointer shadow-md shadow-blue-500/10 h-8.5"
+                                className="px-3.5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl sm:rounded-2xl flex items-center gap-1.5 font-bold text-xs transition duration-200 hover:scale-[1.01] active:scale-95 whitespace-nowrap cursor-pointer shadow-md shadow-blue-500/10 h-10 shrink-0"
                                 title="Escanear Código de Barras"
                             >
-                                <Camera size={12} />
-                                <span className="hidden sm:inline">Scanner</span>
+                                <Camera size={15} />
+                                <span className="hidden sm:inline font-bold">Scanner</span>
                             </button>
                         </div>
                         
-                        <div className="flex flex-col sm:flex-row items-center gap-2 w-full lg:w-[55%] justify-between lg:justify-end overflow-hidden">
+                        <div className="flex flex-col sm:flex-row items-center gap-2 w-full lg:w-[50%] xl:w-[45%] justify-between lg:justify-end overflow-hidden">
                             {/* Category selectors with active active oceanic blue styles */}
                             <div className="flex gap-1 overflow-x-auto w-full sm:w-auto pb-0.5 max-w-lg scrollbar-none select-none">
                                 {categories.map(cat => (

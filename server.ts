@@ -1631,26 +1631,27 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       let orderParams: any[] = [];
 
       if (search) {
-        const s = search.toLowerCase();
-        const searchTerms = s.split(/\s+/).filter(w => w.length > 0);
+        const searchTerms = search.toLowerCase().split(/\s+/).map(w => w.replace(/^#/, '').trim()).filter(w => w.length > 0);
         
         if (searchTerms.length > 0) {
-            const termConditions = searchTerms.map(() => `(LOWER(name) LIKE ? OR LOWER(sku) LIKE ? OR LOWER(category) LIKE ?)`);
+            const termConditions = searchTerms.map(() => `(LOWER(name) LIKE ? OR LOWER(sku) LIKE ? OR LOWER(category) LIKE ? OR CAST(id AS TEXT) LIKE ?)`);
             conditions.push(`(${termConditions.join(' AND ')})`);
             
             for (const term of searchTerms) {
-                whereParams.push(`%${term}%`, `%${term}%`, `%${term}%`);
+                whereParams.push(`%${term}%`, `%${term}%`, `%${term}%`, `%${term}%`);
             }
             
+            const primaryTerm = searchTerms[0];
             orderByStr = ` ORDER BY 
                 CASE 
+                    WHEN CAST(id AS TEXT) = ? THEN 1100
                     WHEN LOWER(sku) = ? THEN 1000
                     WHEN LOWER(name) = ? THEN 900
                     WHEN LOWER(name) LIKE ? THEN 700
                     WHEN LOWER(name) LIKE ? THEN 600
                     ELSE 100
                 END DESC, id DESC `;
-            orderParams.push(s, s, `${s}%`, `% ${s}%`);
+            orderParams.push(primaryTerm, primaryTerm, primaryTerm, `${primaryTerm}%`, `% ${primaryTerm}%`);
         }
       }
 
@@ -1662,7 +1663,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
       queryStr += orderByStr;
       let allParams = [...whereParams];
-      if (search) {
+      if (orderParams.length > 0) {
           allParams = [...allParams, ...orderParams];
       }
 

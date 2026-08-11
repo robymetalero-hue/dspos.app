@@ -2105,10 +2105,12 @@ export function DevolucionesView() {
         }
     }, [sales]);
 
-    const filteredSales = sales.filter(s => 
-        String(s.id).includes(searchQuery) || 
-        (s.client_name && s.client_name.toLowerCase().includes(searchQuery.toLowerCase()))
-    );
+    const cleanSearchQuery = searchQuery.toLowerCase().replace(/^#/, '').trim();
+    const filteredSales = sales.filter(s => {
+        if (!cleanSearchQuery) return true;
+        return String(s.id).includes(cleanSearchQuery) || 
+               (s.client_name && s.client_name.toLowerCase().includes(cleanSearchQuery));
+    });
 
     return (
         <div className="p-5 md:p-6 overflow-y-auto h-full flex flex-col gap-5 select-none bg-neutral-50/50 dark:bg-[#070a10]">

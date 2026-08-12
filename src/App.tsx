@@ -5,11 +5,12 @@ import { AppProvider, useAppContext } from './context/AppContext';
 import { hasPermission } from './utils/permissions';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { startAutoBackupScheduler } from "./utils/driveBackupScheduler";
+import { hardRefreshApp } from "./utils/appRefresh";
 import PhysicalCountManager from './components/PhysicalCountManager';
 import AudioVoice from './components/AudioVoice';
 import { Menu, X, Home, ShoppingCart, Clock, Receipt, PackageSearch, 
     Folder, ClipboardCheck, Undo2, LayoutDashboard, TrendingUp, 
-    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu
+    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw
 } from 'lucide-react';
 
 const lazyWithRetries = (componentImport: () => Promise<any>) =>
@@ -360,7 +361,7 @@ function AppLayout() {
     }, [showDevicesModal]);
 
     // App live update push settings - blocks obsolete clients and clears cache aggressively
-    const CLIENT_VERSION = "2.3.0";
+    const CLIENT_VERSION = "2.4.0";
     const [updateAvailable, setUpdateAvailable] = useState(false);
     const [showUpdateWarning, setShowUpdateWarning] = useState(false);
     const [serverVersion, setServerVersion] = useState("");
@@ -369,7 +370,7 @@ function AppLayout() {
 
     const checkAppVersion = async () => {
         try {
-            const res = await fetch('/api/app-version');
+            const res = await fetch(`/api/app-version?_t=${Date.now()}`);
             if (res.ok) {
                 const data = await res.json();
                 if (data.version && data.version !== CLIENT_VERSION) {
@@ -377,6 +378,7 @@ function AppLayout() {
                     setServerVersion(data.version);
                     setReleaseNotes(data.release_notes || "");
                     setShowUpdateWarning(true);
+                    await hardRefreshApp();
                 }
             }
         } catch (err) {
@@ -386,35 +388,18 @@ function AppLayout() {
 
     const handleForceUpdate = async () => {
         setIsRefreshing(true);
-        try {
-            if ('serviceWorker' in navigator) {
-                const registrations = await navigator.serviceWorker.getRegistrations();
-                for (const registration of registrations) {
-                    await registration.unregister();
-                }
-            }
-            if ('caches' in window) {
-                const keys = await caches.keys();
-                for (const key of keys) {
-                    await caches.delete(key);
-                }
-            }
-            sessionStorage.clear();
-            localStorage.clear(); // Safe key wipe to force clean states
-            window.location.reload();
-        } catch (e) {
-            window.location.reload();
-        }
+        await hardRefreshApp();
     };
 
     useEffect(() => {
-        const handlePushUpdate = (e: any) => {
+        const handlePushUpdate = async (e: any) => {
             const data = e.detail;
             if (data && data.version && data.version !== CLIENT_VERSION) {
                 setUpdateAvailable(true);
                 setServerVersion(data.version);
                 setReleaseNotes(data.release_notes || "");
                 setShowUpdateWarning(true);
+                await hardRefreshApp();
             }
         };
         window.addEventListener('app-update-pushed', handlePushUpdate);
@@ -1334,6 +1319,49 @@ function AppLayout() {
                 </div>
             )}
 
+            {/* Top Floating PWA Update Notification Banner */}
+            <AnimatePresence>
+                {updateAvailable && !showUpdateWarning && (
+                    <motion.div
+                        initial={{ y: -80, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: -80, opacity: 0 }}
+                        className="fixed top-4 left-1/2 -translate-x-1/2 z-[9990] max-w-lg w-[92%] bg-slate-900/95 dark:bg-[#0c111e]/95 text-white backdrop-blur-md p-3.5 px-4 rounded-2xl border border-indigo-500/40 shadow-2xl flex items-center justify-between gap-3 select-none"
+                    >
+                        <div className="flex items-center gap-3">
+                            {/* App Icon + Update Arrow Badge (Google PWA Style) */}
+                            <div className="relative w-11 h-11 shrink-0 rounded-xl bg-slate-800 p-1 border border-indigo-500/30 shadow-md">
+                                <img src="/icon.svg" alt="App Logo" className="w-full h-full object-contain" />
+                                <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white border-2 border-slate-900 shadow-sm animate-bounce">
+                                    <Download size={10} className="stroke-[3]" />
+                                </div>
+                            </div>
+                            <div className="flex flex-col">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 font-mono">Actualización PWA v{serverVersion || "2.4.0"}</span>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                                </div>
+                                <p className="text-xs font-bold text-slate-200">
+                                    Nueva versión del sistema lista
+                                </p>
+                            </div>
+                        </div>
+                        <button
+                            disabled={isRefreshing}
+                            onClick={handleForceUpdate}
+                            className="py-2 px-3.5 bg-gradient-to-r from-indigo-500 to-blue-600 hover:from-indigo-600 hover:to-blue-700 text-white text-xs font-black rounded-xl uppercase tracking-wider transition-all cursor-pointer shadow-md flex items-center gap-1.5 shrink-0"
+                        >
+                            {isRefreshing ? (
+                                <RefreshCw size={13} className="animate-spin" />
+                            ) : (
+                                <Sparkles size={13} />
+                            )}
+                            <span>Actualizar</span>
+                        </button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Elegant Mandatory App Update Locking Modal Overlay */}
             <AnimatePresence>
                 {showUpdateWarning && (
@@ -1341,29 +1369,33 @@ function AppLayout() {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md select-none"
+                        className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md select-none"
                     >
                         <motion.div 
                             initial={{ scale: 0.9, y: 20 }}
                             animate={{ scale: 1, y: 0 }}
                             exit={{ scale: 0.9, y: 20 }}
-                            className="bg-white dark:bg-[#0c111e] rounded-3xl border border-orange-500/30 p-6 max-w-md w-full relative z-10 flex flex-col gap-5 shadow-2xl"
+                            className="bg-white dark:bg-[#0c111e] rounded-3xl border border-indigo-500/30 p-6 max-w-md w-full relative z-10 flex flex-col gap-5 shadow-2xl"
                         >
                             <div className="flex flex-col items-center gap-3.5 text-center">
-                                <div className="w-16 h-16 rounded-full bg-orange-500/10 flex items-center justify-center text-orange-500 border border-orange-500/20 shadow-lg shadow-orange-550/10 animate-bounce">
-                                    <Smartphone size={32} />
+                                {/* PWA App Icon + Animated Update Badge (Google PWA Style) */}
+                                <div className="relative w-20 h-20 rounded-2xl bg-slate-900/90 p-2 border-2 border-indigo-500/40 shadow-xl shadow-indigo-500/10">
+                                    <img src="/icon.svg" alt="Digital Store" className="w-full h-full object-contain" />
+                                    <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full bg-gradient-to-tr from-amber-500 to-orange-500 flex items-center justify-center text-white border-2 border-slate-950 shadow-lg animate-bounce">
+                                        <Download size={16} className="stroke-[3]" />
+                                    </div>
                                 </div>
                                 <div className="flex flex-col gap-1">
-                                    <span className="text-[10px] font-black uppercase tracking-wider text-orange-500 font-mono">Actualización Obligatoria</span>
-                                    <h2 className="font-sans font-black text-slate-855 dark:text-white text-lg tracking-tight leading-snug">
-                                        ¡Nueva Versión de GTR POS Disponible!
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-amber-500 font-mono">Actualización PWA Disponible</span>
+                                    <h2 className="font-sans font-black text-slate-850 dark:text-white text-lg tracking-tight leading-snug">
+                                        ¡Nueva Versión v{serverVersion || "2.4.0"} Detectada!
                                     </h2>
                                 </div>
                             </div>
 
-                            <div className="p-4 rounded-2xl bg-orange-500/5 dark:bg-orange-500/10 border border-orange-500/10 text-center">
+                            <div className="p-4 rounded-2xl bg-indigo-500/5 dark:bg-indigo-500/10 border border-indigo-500/15 text-center">
                                 <p className="text-[11.5px] font-semibold text-slate-600 dark:text-slate-300 leading-relaxed">
-                                    Se ha detectado la versión <strong className="text-orange-550 dark:text-orange-400 font-black">v{serverVersion || "2.3.0"}</strong> en el servidor. Tu dispositivo actual posee una versión anterior y ha sido pausado para evitar cualquier desincronización en tus importes, inventarios y ventas fiscales.
+                                    Se ha publicado la versión <strong className="text-indigo-600 dark:text-indigo-400 font-black">v{serverVersion || "2.4.0"}</strong> en el servidor. Tu aplicación instalada se actualizará para mantener la sincronización de inventarios, ventas y comprobantes fiscales.
                                 </p>
                             </div>
 
@@ -1382,7 +1414,7 @@ function AppLayout() {
                                     whileHover={{ scale: isRefreshing ? 1 : 1.02 }}
                                     whileTap={{ scale: isRefreshing ? 1 : 0.98 }}
                                     onClick={handleForceUpdate}
-                                    className="w-full py-3.5 bg-gradient-to-r from-orange-500 to-amber-500 text-white text-xs font-black rounded-2xl uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-orange-500/25 flex items-center justify-center gap-2"
+                                    className="w-full py-3.5 bg-gradient-to-r from-indigo-600 via-blue-600 to-amber-500 text-white text-xs font-black rounded-2xl uppercase tracking-wider transition-all cursor-pointer shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2"
                                 >
                                     {isRefreshing ? (
                                         <>
@@ -1391,13 +1423,13 @@ function AppLayout() {
                                         </>
                                     ) : (
                                         <>
-                                            <Sparkles size={14} className="text-white animate-pulse" />
-                                            <span>Actualizar Ahora (Forzar)</span>
+                                            <Download size={15} className="text-white animate-bounce" />
+                                            <span>Actualizar Aplicación Ahora</span>
                                         </>
                                     )}
                                 </motion.button>
                                 <p className="text-[9px] font-bold text-center text-slate-400">
-                                    Al presionar se limpiará la caché local y se cargará el terminal limpio instantáneamente.
+                                    Limpieza inteligente de caché: tus ventas, carritos y credenciales permanecen seguros.
                                 </p>
                             </div>
                         </motion.div>

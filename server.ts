@@ -566,8 +566,8 @@ async function startServer() {
       const versionRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_version") as any;
       const notesRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_release_notes") as any;
       
-      const version = versionRow ? versionRow.value : "2.3.0";
-      const release_notes = notesRow ? notesRow.value : "Nuevos iconos animados optimizados en barra principal de módulos y sistema de actualizaciones push obligatorio para sincronización de terminales.";
+      const version = versionRow ? versionRow.value : "2.4.0";
+      const release_notes = notesRow ? notesRow.value : "Optimización de caché PWA, actualización transparente de clientes instalados y prevención de errores de conexión fiscal.";
       
       res.json({
         version,
@@ -576,8 +576,8 @@ async function startServer() {
       });
     } catch (e) {
       res.json({
-        version: "2.3.0",
-        release_notes: "Nuevos iconos animados optimizados en barra principal de módulos y sistema de actualizaciones push obligatorio para sincronización de terminales.",
+        version: "2.4.0",
+        release_notes: "Optimización de caché PWA, actualización transparente de clientes instalados y prevención de errores de conexión fiscal.",
         force_reload: true
       });
     }
@@ -7333,8 +7333,28 @@ Responde de forma sumamente atenta, con alta proactividad, y de manera ultra bre
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+
+    // Prevent caching for HTML entry point so PWA / installed web apps always load latest assets
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        }
+      }
+    }));
+
+    // Prevent /api/* routes from falling back to index.html (returns JSON 404 instead of HTML)
+    app.all('/api/*', (req, res) => {
+      res.status(404).json({ error: 'Ruta de API no encontrada o método no soportado.' });
+    });
+
+    // SPA fallback route for client-side navigation with cache prevention
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

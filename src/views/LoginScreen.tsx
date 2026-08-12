@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
     Lock, Eye, EyeOff, Sparkles, ShieldAlert, 
-    RefreshCw, UserCheck, KeySquare, Store
+    RefreshCw, UserCheck, KeySquare, Store, Download
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { hardRefreshApp } from '../utils/appRefresh';
+
+const CLIENT_VERSION = "2.4.0";
 
 export default function LoginScreen() {
     const { setUser } = useAppContext();
@@ -15,6 +18,30 @@ export default function LoginScreen() {
     // Status states
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [updateNotice, setUpdateNotice] = useState<{ version: string; releaseNotes?: string } | null>(null);
+
+    useEffect(() => {
+        // Verify app version on mount to catch updates before user logs in
+        const checkVersionOnLogin = async () => {
+            try {
+                const res = await fetch(`/api/app-version?_t=${Date.now()}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.version && data.version !== CLIENT_VERSION) {
+                        setUpdateNotice({ version: data.version, releaseNotes: data.release_notes });
+                    }
+                }
+            } catch {
+                // Ignore network check failure on login
+            }
+        };
+        checkVersionOnLogin();
+    }, []);
+
+    const handleApplyUpdate = async () => {
+        setLoading(true);
+        await hardRefreshApp();
+    };
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -26,6 +53,21 @@ export default function LoginScreen() {
         setLoading(true);
         setError(null);
 
+        // Pre-check version before sending credentials
+        try {
+            const versionRes = await fetch(`/api/app-version?_t=${Date.now()}`);
+            if (versionRes.ok) {
+                const versionData = await versionRes.json();
+                if (versionData.version && versionData.version !== CLIENT_VERSION) {
+                    setUpdateNotice({ version: versionData.version, releaseNotes: versionData.release_notes });
+                    await hardRefreshApp();
+                    return;
+                }
+            }
+        } catch {
+            // Proceed to login if version endpoint is unreachable
+        }
+
         try {
             const res = await fetch('/api/auth/login', {
                 method: 'POST',
@@ -33,21 +75,35 @@ export default function LoginScreen() {
                 body: JSON.stringify({ username: username.trim(), password })
             });
 
-            const contentType = res.headers.get("content-type");
-            if (contentType && contentType.includes("text/html")) {
-                throw new Error("El servidor no pudo procesar la solicitud. Es posible que el servidor esté inactivo o la sesión haya expirado.");
+            const contentType = res.headers.get("content-type") || "";
+            let data: any = null;
+
+            if (contentType.includes("application/json")) {
+                try {
+                    data = await res.json();
+                } catch {
+                    data = null;
+                }
             }
-            const data = await res.json();
-            if (res.ok) {
+
+            if (res.ok && data) {
                 if (data.token) {
                     localStorage.setItem('auth_token', data.token);
                 }
                 setUser(data.user);
+            } else if (data && data.error) {
+                setError(data.error);
             } else {
-                setError(data.error || "Credenciales inválidas de terminal de caja.");
+                if (res.status === 502 || res.status === 503 || res.status === 504) {
+                    setError("El servidor fiscal se está actualizando o reiniciando. Por favor reintente en unos segundos.");
+                } else if (res.status === 404) {
+                    setError("Servicio fiscal no disponible temporalmente. Por favor recargue la página.");
+                } else {
+                    setError("Credenciales inválidas de terminal de caja o respuesta no válida.");
+                }
             }
         } catch (err: any) {
-            setError("Error de conexión con el servidor fiscal: " + err.message);
+            setError("Error de conexión con el servidor fiscal: " + (err?.message || "Servicio no disponible"));
         } finally {
             setLoading(false);
         }
@@ -80,6 +136,41 @@ export default function LoginScreen() {
                         </p>
                     </div>
                 </div>
+
+                {/* PWA Update Notice in Login */}
+                <AnimatePresence mode="wait">
+                    {updateNotice && (
+                        <motion.div 
+                            key="update-notice"
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="p-3.5 bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-blue-500/10 border border-amber-500/30 rounded-2xl flex flex-col gap-2.5 mb-5 relative overflow-hidden"
+                        >
+                            <div className="flex items-center gap-3">
+                                <div className="relative w-10 h-10 shrink-0 rounded-xl bg-slate-900 p-1 border border-indigo-500/40 shadow-md">
+                                    <img src="/icon.svg" alt="App Logo" className="w-full h-full object-contain" />
+                                    <div className="absolute -bottom-1 -right-1 w-4.5 h-4.5 rounded-full bg-amber-500 flex items-center justify-center text-white border border-slate-900 animate-bounce">
+                                        <Download size={9} className="stroke-[3]" />
+                                    </div>
+                                </div>
+                                <div className="flex flex-col">
+                                    <span className="text-[9.5px] font-black uppercase tracking-wider text-amber-500 font-mono">Actualización PWA Detectada</span>
+                                    <span className="text-xs font-black text-slate-800 dark:text-white">Nueva versión v{updateNotice.version}</span>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleApplyUpdate}
+                                disabled={loading}
+                                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-indigo-600 hover:from-amber-600 hover:to-indigo-700 text-white text-xs font-black rounded-xl uppercase tracking-wider shadow-md flex items-center justify-center gap-2 transition cursor-pointer"
+                            >
+                                <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
+                                <span>Actualizar PWA Ahora</span>
+                            </button>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
 
                 {/* Main Error Alert */}
                 <AnimatePresence mode="wait">

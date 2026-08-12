@@ -59,7 +59,9 @@ db.exec(`
     price_unit REAL,
     price_bulk REAL,
     price_cost REAL,
-    stock_alarm INTEGER
+    stock_alarm INTEGER,
+    image TEXT,
+    updated_at DATETIME DEFAULT NULL
   );
 
   CREATE TABLE IF NOT EXISTS clients (
@@ -294,6 +296,10 @@ try {
 
 try {
   db.exec("ALTER TABLE products ADD COLUMN image TEXT DEFAULT NULL");
+} catch (e: any) {}
+
+try {
+  db.exec("ALTER TABLE products ADD COLUMN updated_at DATETIME DEFAULT NULL");
 } catch (e: any) {}
 
 try {

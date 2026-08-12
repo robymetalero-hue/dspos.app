@@ -8,7 +8,9 @@ import {
 } from 'lucide-react';
 
 interface PhysicalCountManagerProps {
-  onClose: () => void;
+  onClose?: () => void;
+  externalViewMode?: 'blind' | 'quantities';
+  embeddedMode?: boolean;
 }
 
 interface InventoryCount {
@@ -51,18 +53,20 @@ interface CountItem {
   recount_requested?: number;
 }
 
-export default function PhysicalCountManager({ onClose }: PhysicalCountManagerProps) {
+export default function PhysicalCountManager({ onClose, externalViewMode, embeddedMode = false }: PhysicalCountManagerProps) {
   const { user, products, fetchProducts, showNotification } = useAppContext();
   const isAdmin = user?.role === 'admin' || user?.role === 'propietario' || user?.role === 'administrador' || user?.role === 'dueño' || user?.role === 'jefe';
   const canPreviewQuantities = isAdmin || hasPermission(user, 'preview_quantities_in_count');
 
-  // Prevent background page scrolling when audit overlay is active
+  // Prevent background page scrolling when audit overlay is active ONLY if not embedded
   useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, []);
+    if (!embeddedMode) {
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = '';
+      };
+    }
+  }, [embeddedMode]);
 
   const [activeTab, setActiveTab] = useState<'activo' | 'historico'>('activo');
   const [activeSession, setActiveSession] = useState<InventoryCount | null>(null);
@@ -552,7 +556,10 @@ export default function PhysicalCountManager({ onClose }: PhysicalCountManagerPr
   return (
       <div 
         id="physical-count-screen"
-        className="fixed inset-0 z-[100] bg-slate-50 dark:bg-[#0c111e] w-screen h-screen flex flex-col overflow-hidden pointer-events-auto select-none animate-in fade-in duration-200"
+        className={embeddedMode 
+          ? "w-full h-full flex flex-col overflow-hidden bg-slate-50 dark:bg-[#0c111e] rounded-2xl border border-slate-200/80 dark:border-slate-850/60 select-none animate-in fade-in duration-200" 
+          : "fixed inset-0 z-[100] bg-slate-50 dark:bg-[#0c111e] w-screen h-screen flex flex-col overflow-hidden pointer-events-auto select-none animate-in fade-in duration-200"
+        }
       >
         
         {/* ENCABEZADO */}

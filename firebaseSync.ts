@@ -2,7 +2,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 
 let quotaExceeded = false;
 let quotaExceededTime = 0;
-function checkQuota() {
+export function checkQuota(): boolean {
   if (quotaExceeded) {
     if (Date.now() - quotaExceededTime > 1000 * 60 * 60) {
       quotaExceeded = false;
@@ -12,15 +12,18 @@ function checkQuota() {
   }
   return false;
 }
-function handleSyncError(err, msg) {
-  if (err && err.message && err.message.toLowerCase().includes('quota')) {
+
+function handleSyncError(err: any, msg: string) {
+  const errMsg = err?.message || String(err);
+  const lower = errMsg.toLowerCase();
+  if (lower.includes('quota') || lower.includes('resource_exhausted') || lower.includes('429')) {
     if (!quotaExceeded) {
-      console.warn("[Firestore Quota Exceeded] Free tier read/write quota exceeded. Offline mode engaged.");
+      console.warn("[Sync] Firestore quota limit reached. Operating in standalone offline mode.");
       quotaExceeded = true;
       quotaExceededTime = Date.now();
     }
-  } else {
-    console.warn(msg, err && err.message ? err.message : err);
+  } else if (!lower.includes('offline') && !lower.includes('network') && !lower.includes('unavailable') && !lower.includes('auth')) {
+    console.warn(`${msg} ${errMsg}`);
   }
 }
 
@@ -52,7 +55,6 @@ for (const loc of configLocations) {
   try {
     if (fs.existsSync(loc)) {
       firebaseConfig = JSON.parse(fs.readFileSync(loc, 'utf8'));
-      console.log(`[Firebase] Loaded configuration file from: ${loc}`);
       break;
     }
   } catch (e: any) {
@@ -75,11 +77,11 @@ try {
         messagingSenderId: firebaseConfig.messagingSenderId,
         appId: firebaseConfig.appId
       });
-      console.log("Firebase SDK successfully initialized on server side with Project ID:", firebaseConfig.projectId);
+      console.log("[Firebase] SDK initialized with Project ID:", firebaseConfig.projectId);
     }
   }
 } catch (e: any) {
-  console.warn("Could not initialize Firebase Web SDK safely on server:", e.message);
+  console.warn("[Firebase] SDK initialization deferred:", e.message);
 }
 
 let firestoreInstance: any = null;
@@ -90,40 +92,51 @@ try {
         : getFirestore(app))
     : null;
 } catch (e: any) {
-  console.warn("Could not initialize Firestore instance safely on server:", e.message);
+  console.warn("[Firestore] Instance deferred:", e.message);
 }
 
 export const firestore = firestoreInstance;
 
+let authDisabledUntil = 0;
+let authAuthenticated = false;
 let authPromise: Promise<void> | null = null;
+
 export async function ensureServerAuth() {
-  if (!app) return;
+  if (!app || !firestore) return;
+  if (authAuthenticated) return;
+  if (Date.now() < authDisabledUntil) return;
+
   if (!authPromise) {
     authPromise = (async () => {
-      const authTimeout = new Promise<void>((resolve) => setTimeout(resolve, 5000));
+      const authTimeout = new Promise<void>((resolve) => setTimeout(resolve, 3000));
       const authTask = (async () => {
-        const auth = getAuth(app);
-        const email = "server_sync@dstore.app";
-        const password = "ServerSync_SecretPassword!123";
         try {
-          await signInWithEmailAndPassword(auth, email, password);
-          console.log("[Sync] Server authenticated successfully.");
-        } catch (e: any) {
-          if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential') {
-            console.log("[Sync] Server auth user not found, creating...");
-            try {
-              await createUserWithEmailAndPassword(auth, email, password);
-              console.log("[Sync] Server auth created and signed in.");
-            } catch (err: any) {
-              console.warn("[Sync] Server auth create warning:", err.message);
+          const auth = getAuth(app);
+          const email = "server_sync@dstore.app";
+          const password = "ServerSync_SecretPassword!123";
+          try {
+            await signInWithEmailAndPassword(auth, email, password);
+            authAuthenticated = true;
+          } catch (e: any) {
+            if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential') {
+              try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                authAuthenticated = true;
+              } catch (createErr: any) {
+                authDisabledUntil = Date.now() + (10 * 60 * 1000);
+              }
+            } else {
+              authDisabledUntil = Date.now() + (10 * 60 * 1000);
             }
-          } else {
-            console.warn("[Sync] Server sign in warning:", e.message);
           }
+        } catch (err: any) {
+          authDisabledUntil = Date.now() + (10 * 60 * 1000);
         }
       })();
       await Promise.race([authTask, authTimeout]);
-    })();
+    })().finally(() => {
+      authPromise = null;
+    });
   }
   return authPromise;
 }
@@ -186,8 +199,7 @@ export const lastSyncedMaxIdCache: Record<string, number> = {};
  * Supports targeted synchronization for specific rows to optimize speed and network payload.
  */
 export async function pushLocalToFirestore(tableName: string, idOrIds?: any | any[]) {
-  if (!firestore) {
-    console.warn("Firestore not initialized, skipping push for table:", tableName);
+  if (!firestore || checkQuota()) {
     return;
   }
   await ensureServerAuth();
@@ -208,31 +220,26 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
       }
     } else {
       // Full table sync requested.
-      // Optimización crítica para tablas append-only: evitar lecturas de Firestore enteras y escrituras redundantes.
       if (APPEND_ONLY_TABLES.includes(tableName)) {
         // 1. Obtener ID máximo local en SQLite
         let localMaxId = 0;
         try {
           const maxRow = db.prepare(`SELECT MAX(id) as maxId FROM ${tableName}`).get() as any;
           localMaxId = Number(maxRow?.maxId || 0);
-        } catch (sqliteErr: any) {
-          console.warn(`[Sync] Could not read local max ID for append-only table "${tableName}":`, sqliteErr.message);
-        }
+        } catch (sqliteErr: any) {}
 
         // 2. Si localMaxId es 0, no hay datos locales, no hace falta hacer nada
         if (localMaxId === 0) {
-          console.log(`[Sync] Table "${tableName}" is empty locally. Skipping sync.`);
           return;
         }
 
-        // 3. Consultar cache local en memoria. Si ya está sincronizado hasta el ID local máximo, omitir completamente (ahorra 100% de operaciones de Firestore).
+        // 3. Consultar cache local en memoria. Si ya está sincronizado hasta el ID local máximo, omitir
         const cachedMax = lastSyncedMaxIdCache[tableName];
         if (cachedMax !== undefined && localMaxId <= cachedMax) {
-          console.log(`[Sync] Table "${tableName}" (append-only) is up-to-date in local cache (Max ID: ${localMaxId}). Skip Firestore check.`);
           return;
         }
 
-        // 4. No está en cache o hay nuevos IDs. Consultar ID máximo actual en Firestore (cuesta solo 1 operación de lectura).
+        // 4. Consultar ID máximo actual en Firestore
         let firestoreMaxId = 0;
         const colRef = collection(firestore, tableName);
         try {
@@ -245,29 +252,23 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
             }
           }
         } catch (firestoreErr: any) {
-          handleSyncError(firestoreErr, `[Sync] Failed to fetch max ID from Firestore for "${tableName}". Defaulting to full synchronization:`);
-          // Si falla (ej. índice ausente en Firestore), desactivamos la optimización para esta pasada y dejamos que haga el flujo normal.
+          handleSyncError(firestoreErr, `[Sync] Could not verify remote max ID for "${tableName}":`);
           firestoreMaxId = -1;
         }
 
         if (firestoreMaxId >= 0) {
-          // Si el ID máximo de Firestore es igual o mayor al local, estamos al día. Guardamos en cache y retornamos.
           if (localMaxId <= firestoreMaxId) {
             lastSyncedMaxIdCache[tableName] = firestoreMaxId;
-            console.log(`[Sync] Table "${tableName}" is already fully synchronized up to Firestore Max ID: ${firestoreMaxId}.`);
             return;
           }
 
-          // Solo sincronizar registros locales con id > firestoreMaxId
           rows = db.prepare(`SELECT * FROM ${tableName} WHERE id > ?`).all(firestoreMaxId) as any[];
-          console.log(`[Sync] Table "${tableName}" (append-only) has ${rows.length} new records to upload (IDs > ${firestoreMaxId}).`);
 
           if (rows.length === 0) {
             lastSyncedMaxIdCache[tableName] = firestoreMaxId;
             return;
           }
 
-          // Subir solo las filas nuevas usando lotes (batch)
           let batch = writeBatch(firestore);
           let opCount = 0;
 
@@ -296,14 +297,11 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
             await batch.commit();
           }
 
-          // Guardar en cache el ID máximo local sincronizado exitosamente
           lastSyncedMaxIdCache[tableName] = localMaxId;
-          console.log(`[Sync] Incremental sync for table "${tableName}" (${rows.length} rows) completed successfully.`);
           return;
         }
       }
 
-      // Default fallback (para tablas pequeñas modificables o en caso de error del optimizador)
       rows = db.prepare(`SELECT * FROM ${tableName}`).all() as any[];
     }
 
@@ -430,27 +428,22 @@ export async function pushAllLocalToFirestore() {
  * This function handles deletions in Firestore correctly by clearing local records before sync ONLY if forceOverwrite is true.
  */
 export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
-  if (!firestore) {
-    console.warn("[Sync] Firestore not initialized, skipping database pull.");
+  if (!firestore || checkQuota()) {
     return;
   }
   await ensureServerAuth();
 
   if (isPullingInProgress) {
-    console.log("[Sync] Pull already in progress. Skipping concurrent execution.");
     return;
   }
 
   if (!forceOverwrite && (Date.now() - lastPullTimestamp < PULL_COOLDOWN_MS)) {
-    // Cool down period, skip to prevent rate limits
     return;
   }
 
   isPullingInProgress = true;
 
   try {
-    console.log("[Sync] Pulling master database records from Google Cloud Firestore...");
-
     // Determine if Firestore has been initialized/populated already
     const metaRef = doc(firestore, 'sync_metadata', 'status');
     const metaDoc = await getDoc(metaRef);
@@ -471,7 +464,7 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
           break;
         }
       } catch (err: any) {
-        console.warn(`[Sync] Safety check failed for Firestore collection "${collName}":`, err.message);
+        handleSyncError(err, `[Sync] Safety check for "${collName}":`);
       }
     }
 
@@ -479,18 +472,18 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
 
     if (!isPopulated) {
       if (hasLocalUserData) {
-        console.log("[Sync] Firestore is currently empty/uninitialized. Seeding initial cloud tables with local database records.");
+        console.log("[Sync] Initializing cloud database with local records...");
         await pushAllLocalToFirestore();
         await setDoc(metaRef, { initialized: true, initializedAt: new Date().toISOString() });
         return;
       } else {
-        console.log("[Sync] Firestore and local SQLite are both empty/uninitialized. Skipping initial seed.");
         await setDoc(metaRef, { initialized: true, initializedAt: new Date().toISOString() });
       }
     } else if (!metaDoc.exists()) {
-      // Ensure metadata flag exists henceforth so deleting all products does not trigger re-seeding
       await setDoc(metaRef, { initialized: true, initializedAt: new Date().toISOString() });
     }
+
+    let updatedTableCount = 0;
 
     // Pull each collection and upsert data into SQLite
     for (const table of SYNC_TABLES) {
@@ -502,28 +495,20 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
             try {
               db.prepare(`DELETE FROM ${table}`).run();
             } catch (e: any) {}
-            console.log(`[Sync] Table "${table}" is empty in Cloud Firestore. Local SQLite table synced to zero records.`);
           } else {
             const localCount = (db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get() as any)?.count || 0;
             if (localCount > 0) {
-              console.log(`[Sync Safety] Descubierta tabla "${table}" vacía en Firestore pero con ${localCount} filas locales. Reparando y subiendo datos locales para prevenir pérdida.`);
               await pushLocalToFirestore(table);
-            } else {
-              console.log(`[Sync] Table "${table}" was empty in both Cloud Firestore and SQLite.`);
             }
           }
           continue;
         }
 
-        // Sync remote records with SQLite table in an atomic transaction:
-        // Clear the local table first to ensure consistency (deletions are synced correctly from cloud to local),
-        // then insert the latest remote records with safety column checking.
         let allowedColumns: Set<string>;
         try {
           const info = db.pragma(`table_info(${table})`) as any[];
           allowedColumns = new Set(info.map(col => col.name));
         } catch (colErr: any) {
-          console.warn(`[Sync] Could not fetch columns for table ${table}, using document keys directly:`, colErr.message);
           allowedColumns = new Set();
         }
 
@@ -546,13 +531,10 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
               }
               if (delCount > 0) {
                 await deleteBatch.commit();
-                console.log(`[Sync Migration] Deleted ${delCount} unused default departments from Firestore.`);
               }
               db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('migration_clean_ghost_departments_fs', 'true')").run();
             }
-          } catch (migErr: any) {
-            console.warn("[Sync Migration Error] Failed to run ghost departments Firestore cleanup migration:", migErr.message);
-          }
+          } catch (migErr: any) {}
         }
 
         const syncTx = db.transaction(() => {
@@ -563,18 +545,31 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
           for (const docSnap of snapshot.docs) {
             const data = docSnap.data();
             
-            // Skip default departments if they are ghost defaults being deleted
             if (table === 'departments' && data && data.name && ['Storage', 'Micro SDs', 'USBs', 'Electronics', 'Micro SD'].includes(data.name)) {
               const prodCount = db.prepare("SELECT COUNT(*) as count FROM products WHERE category = ?").get(data.name) as any;
               if (!prodCount || prodCount.count === 0) {
-                continue; // Skip inserting this deleted department
+                continue;
               }
+            }
+
+            if (table === 'products' && !forceOverwrite && data.id) {
+              try {
+                const localProd = db.prepare("SELECT stock, updated_at FROM products WHERE id = ?").get(data.id) as any;
+                if (localProd && localProd.updated_at && data.updated_at) {
+                  const localTime = new Date(localProd.updated_at).getTime();
+                  const remoteTime = new Date(data.updated_at).getTime();
+                  if (!isNaN(localTime) && !isNaN(remoteTime) && localTime > remoteTime) {
+                    console.log(`[Sync Conflict Resolution] Preserving local product stock for #${data.id} (Local updated_at: ${localProd.updated_at} > Remote: ${data.updated_at}). Syncing local to Firestore...`);
+                    pushLocalToFirestore('products', [data.id]).catch(() => {});
+                    continue;
+                  }
+                }
+              } catch (e: any) {}
             }
 
             let keys = Object.keys(data);
             if (keys.length === 0) continue;
 
-            // Filter keys to valid SQLite columns only
             if (allowedColumns.size > 0) {
               keys = keys.filter(k => allowedColumns.has(k));
             }
@@ -589,22 +584,23 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
         });
 
         syncTx();
-        console.log(`[Sync] Table "${table}" successfully replaced local copy with ${snapshot.size} cloud records.`);
+        updatedTableCount++;
       } catch (tableErr: any) {
-        handleSyncError(tableErr, `[Sync Warning] Failed to pull table "${table}" from Cloud Firestore:`);
+        handleSyncError(tableErr, `[Sync Warning] Table "${table}":`);
       }
     }
 
     lastPullTimestamp = Date.now();
     
-    // Clear the max ID cache to ensure we correctly revalidate next writes against SQLite / Firestore
     for (const key of Object.keys(lastSyncedMaxIdCache)) {
       delete lastSyncedMaxIdCache[key];
     }
     
-    console.log("[Sync] Database synchronizations completed. GTR POS is fully ready and permanently synced.");
+    if (forceOverwrite) {
+      console.log(`[Sync] Master database pull completed successfully (${updatedTableCount} tables synced).`);
+    }
   } catch (error: any) {
-    console.log("[Sync Offline Mode] Standard local database operates standalone. Remote cloud sync is bypassed:", error.message);
+    // Standalone fallback
   } finally {
     isPullingInProgress = false;
   }

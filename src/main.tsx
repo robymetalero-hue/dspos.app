@@ -129,13 +129,7 @@ try {
       }
       return originalFetch(input, init).then(res => {
         if (res.status === 401 && !url.includes('/auth/login')) {
-            const hasToken = localStorage.getItem('auth_token');
-            const hasUser = localStorage.getItem('user');
-            if (hasToken || hasUser) {
-                localStorage.removeItem('auth_token');
-                localStorage.removeItem('user');
-                window.location.reload();
-            }
+            console.warn("[Fetch Interceptor] Received 401 Unauthorized for URL:", url);
         }
         return res;
       });

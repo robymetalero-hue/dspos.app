@@ -1102,13 +1102,16 @@ function AppLayout() {
                                 Sincronizando...
                             </span>
                         ) : syncError ? (
-                            <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono ${
+                            <button 
+                                onClick={() => triggerOnlineSync()}
+                                title={`Error de sincronización: ${syncError}. Haz clic para reintentar.`}
+                                className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono cursor-pointer hover:opacity-80 transition-opacity ${
                                 syncError.toLowerCase().includes('quota') || syncError.toLowerCase().includes('resource_exhausted')
                                     ? 'text-rose-500 bg-rose-500/10 border border-rose-500/20'
                                     : 'text-rose-400 bg-rose-400/10 border border-rose-400/15'
-                            }`} title={syncError}>
-                                {syncError.toLowerCase().includes('quota') || syncError.toLowerCase().includes('resource_exhausted') ? 'Cuota Lim.' : 'Sync Err'}
-                            </span>
+                            }`}>
+                                {syncError.toLowerCase().includes('quota') || syncError.toLowerCase().includes('resource_exhausted') ? 'Cuota Lim.' : 'Reintentar Sync'}
+                            </button>
                         ) : (
                             <span className="text-[8px] font-extrabold text-[#2563eb] bg-[#2563eb]/10 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono">
                                 Online

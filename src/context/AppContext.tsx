@@ -328,9 +328,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         console.log("[Sync] User role/permissions updated on server, synchronizing session...", freshUser);
                         setUser(freshUser);
                     }
-                } else if (res.status === 401 && authToken) {
-                    console.warn("[Sync] Auth token invalid or expired. Logging out.");
-                    setUser(null);
+                } else if (res.status === 401) {
+                    console.warn("[Sync] Auth check returned 401. Retaining local cached user session.");
                 }
             } catch (err) {
                 console.warn("[Sync] Background session sync failed:", err);

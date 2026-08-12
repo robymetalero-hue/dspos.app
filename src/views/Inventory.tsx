@@ -612,6 +612,8 @@ export default function Inventory() {
     // Quick Stock Entry Modal States
     const [isStockInModalOpen, setIsStockInModalOpen] = useState(false);
     const [stockInSearch, setStockInSearch] = useState("");
+    const [stockInSearchResults, setStockInSearchResults] = useState<Product[]>([]);
+    const [isSearchingStockIn, setIsSearchingStockIn] = useState(false);
     const [selectedProductForStockIn, setSelectedProductForStockIn] = useState<Product | null>(null);
     const [stockInQuantity, setStockInQuantity] = useState<number | "">("");
     const [keepSameCost, setKeepSameCost] = useState(true);
@@ -619,6 +621,34 @@ export default function Inventory() {
     const [isSubmittingStockIn, setIsSubmittingStockIn] = useState(false);
     const [arrivalHistory, setArrivalHistory] = useState<any[]>([]);
     const [activeModalTab, setActiveModalTab] = useState<'form' | 'history'>('form');
+
+    useEffect(() => {
+        if (!stockInSearch.trim() || selectedProductForStockIn) {
+            setStockInSearchResults([]);
+            setIsSearchingStockIn(false);
+            return;
+        }
+
+        const query = stockInSearch.trim();
+        setIsSearchingStockIn(true);
+
+        const timer = setTimeout(async () => {
+            try {
+                const res = await fetch(`/api/products?search=${encodeURIComponent(query)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    const fetched: Product[] = Array.isArray(data) ? data : (Array.isArray(data.products) ? data.products : []);
+                    setStockInSearchResults(fetched);
+                }
+            } catch (e) {
+                console.error("Error searching products for stock-in modal:", e);
+            } finally {
+                setIsSearchingStockIn(false);
+            }
+        }, 150);
+
+        return () => clearTimeout(timer);
+    }, [stockInSearch, selectedProductForStockIn]);
 
     const loadArrivalHistory = async () => {
         try {
@@ -1446,33 +1476,52 @@ export default function Inventory() {
                                         {/* Dropdown search suggestions */}
                                         {stockInSearch && !selectedProductForStockIn && (
                                             <div className="absolute z-20 top-full left-0 right-0 mt-1 bg-white dark:bg-[#0d1220] border border-slate-205 dark:border-[#1a233a] rounded-2xl shadow-xl overflow-hidden max-h-56 overflow-y-auto">
-                                                {filterAndRankProducts(products, stockInSearch)
-                                                    .slice(0, 5)
-                                                    .map(p => (
-                                                        <button
-                                                            key={p.id}
-                                                            type="button"
-                                                            onClick={() => {
-                                                                setSelectedProductForStockIn(p);
-                                                                setStockInSearch(p.name);
-                                                            }}
-                                                            className="w-full text-left p-3 hover:bg-slate-50 dark:hover:bg-[#141b2c] flex justify-between items-center border-b border-slate-100 dark:border-[#162035] last:border-none transition cursor-pointer"
-                                                        >
-                                                            <div className="flex flex-col">
-                                                                <span className="text-xs font-bold text-slate-800 dark:text-slate-100 uppercase">{p.name}</span>
-                                                                <span className="text-[9px] text-slate-400 font-mono font-bold mt-0.5">{p.sku} • {p.category}</span>
+                                                {(() => {
+                                                    const map = new Map<number, Product>();
+                                                    products.forEach(p => map.set(p.id, p));
+                                                    stockInSearchResults.forEach(p => map.set(p.id, p));
+                                                    const combinedList = Array.from(map.values());
+                                                    const filtered = filterAndRankProducts(combinedList, stockInSearch);
+
+                                                    if (filtered.length > 0) {
+                                                        return filtered.slice(0, 8).map(p => (
+                                                            <button
+                                                                key={p.id}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSelectedProductForStockIn(p);
+                                                                    setStockInSearch(p.name);
+                                                                    setStockInSearchResults([]);
+                                                                }}
+                                                                className="w-full text-left p-3 hover:bg-slate-50 dark:hover:bg-[#141b2c] flex justify-between items-center border-b border-slate-100 dark:border-[#162035] last:border-none transition cursor-pointer"
+                                                            >
+                                                                <div className="flex flex-col">
+                                                                    <span className="text-xs font-bold text-slate-800 dark:text-slate-100 uppercase">{p.name}</span>
+                                                                    <span className="text-[9px] text-slate-400 font-mono font-bold mt-0.5">{p.sku || `#${p.id}`} • {p.category}</span>
+                                                                </div>
+                                                                <div className="text-right flex flex-col">
+                                                                    <span className="text-[10px] font-extrabold text-indigo-600 dark:text-indigo-400">Stock: {p.stock} pz</span>
+                                                                    {user?.role === 'admin' && <span className="text-[9px] text-slate-400 font-bold">Costo: Bs. {p.price_cost || 0}</span>}
+                                                                </div>
+                                                            </button>
+                                                        ));
+                                                    }
+
+                                                    if (isSearchingStockIn) {
+                                                        return (
+                                                            <div className="p-4 text-center text-xs text-slate-400 font-semibold flex items-center justify-center gap-2">
+                                                                <Loader2 className="animate-spin text-indigo-500" size={14} />
+                                                                Buscando en todo el inventario...
                                                             </div>
-                                                            <div className="text-right flex flex-col">
-                                                                <span className="text-[10px] font-extrabold text-indigo-600 dark:text-indigo-400">Stock: {p.stock} pz</span>
-                                                                {user?.role === 'admin' && <span className="text-[9px] text-slate-400 font-bold">Costo: Bs. {p.price_cost || 0}</span>}
-                                                            </div>
-                                                        </button>
-                                                    ))}
-                                                {filterAndRankProducts(products, stockInSearch).length === 0 && (
-                                                    <div className="p-4 text-center text-xs text-slate-400 font-semibold">
-                                                        Ningún producto coincide con el término de búsqueda.
-                                                    </div>
-                                                )}
+                                                        );
+                                                    }
+
+                                                    return (
+                                                        <div className="p-4 text-center text-xs text-slate-400 font-semibold">
+                                                            Ningún producto coincide con el término de búsqueda.
+                                                        </div>
+                                                    );
+                                                })()}
                                             </div>
                                         )}
                                     </div>

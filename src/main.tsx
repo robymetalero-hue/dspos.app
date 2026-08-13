@@ -174,33 +174,3 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
-
-// Register PWA Service Worker for installed mobile and desktop PWA clients
-if ('serviceWorker' in navigator && typeof window !== 'undefined') {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then((reg) => {
-      console.log('PWA ServiceWorker registered successfully with scope:', reg.scope);
-
-      // Periodically check for worker updates every 60 seconds
-      setInterval(() => {
-        reg.update().catch(() => {});
-      }, 60000);
-
-      reg.addEventListener('updatefound', () => {
-        const installingWorker = reg.installing;
-        if (installingWorker) {
-          installingWorker.addEventListener('statechange', () => {
-            if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              console.log('PWA: New version detected in background.');
-              window.dispatchEvent(new CustomEvent('app-update-pushed', {
-                detail: { version: '2.4.0', release_notes: 'Nueva versión del sistema lista para aplicar.' }
-              }));
-            }
-          });
-        }
-      });
-    }).catch((err) => {
-      console.warn('PWA ServiceWorker registration skipped:', err);
-    });
-  });
-}

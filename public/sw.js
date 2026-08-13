@@ -1,17 +1,10 @@
-const CACHE_NAME = 'gtr-pos-v2.4.0-cache';
+const CACHE_NAME = 'gtr-pos-v3-cache';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/manifest.json',
   '/icon.svg'
 ];
-
-// Message listener for explicit force updates from client UI
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
 
 // Installation phase - Pre-caching baseline shell
 self.addEventListener('install', (event) => {
@@ -26,26 +19,19 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activation phase - Cleaning up deprecated caches & claiming clients
+// Activation phase - Cleaning up deprecated caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME) {
-            console.log('PWA: Purging outdated cache:', key);
             return caches.delete(key);
           }
         })
       );
     }).then(() => {
       return self.clients.claim();
-    }).then(() => {
-      return self.clients.matchAll({ type: 'window' }).then((clients) => {
-        clients.forEach((client) => {
-          client.postMessage({ type: 'SW_ACTIVATED', version: '2.4.0' });
-        });
-      });
     })
   );
 });
@@ -62,10 +48,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 1. Navigation & HTML Mode: Network-First ALWAYS to fetch fresh index.html
-  if (event.request.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname === '/') {
+  // 1. Navigation Mode: Network-First falling back to index.html
+  if (event.request.mode === 'navigate') {
     event.respondWith(
-      fetch(event.request, { cache: 'no-cache' })
+      fetch(event.request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const responseClone = networkResponse.clone();
@@ -82,7 +68,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2. JS / CSS Bundles and Static Assets: Network-First with cache fallback
+  // 2. Static Assets (JS, CSS, Fonts, Images): Cache-First / Stale-While-Revalidate
   const isStaticAsset = 
     url.pathname.endsWith('.js') || 
     url.pathname.endsWith('.css') || 
@@ -96,8 +82,8 @@ self.addEventListener('fetch', (event) => {
 
   if (isStaticAsset) {
     event.respondWith(
-      fetch(event.request)
-        .then((networkResponse) => {
+      caches.match(event.request).then((cachedResponse) => {
+        const fetchPromise = fetch(event.request).then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const responseClone = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
@@ -105,10 +91,11 @@ self.addEventListener('fetch', (event) => {
             });
           }
           return networkResponse;
-        })
-        .catch(() => {
-          return caches.match(event.request);
-        })
+        }).catch(() => null);
+
+        // Instant return from cache, falls back to network promise if cache miss
+        return cachedResponse || fetchPromise;
+      })
     );
     return;
   }

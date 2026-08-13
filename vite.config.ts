@@ -10,7 +10,7 @@ export default defineConfig(() => {
       react(), 
       tailwindcss(),
       VitePWA({
-        registerType: 'autoUpdate',
+        registerType: 'prompt',
         injectRegister: 'auto',
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
@@ -34,11 +34,33 @@ export default defineConfig(() => {
           ]
         },
         manifest: {
-          name: 'GTR POS Sistema',
+          name: 'GTR POS - Punto de Venta',
           short_name: 'GTR POS',
-          description: 'Sistema de Punto de Venta Profesional',
-          theme_color: '#ffffff',
-          icons: []
+          description: 'Sistema de Punto de Venta e Inventarios GTR POS',
+          theme_color: '#2563eb',
+          background_color: '#090d16',
+          display: 'standalone',
+          orientation: 'any',
+          scope: '/',
+          start_url: '/',
+          icons: [
+            {
+              src: '/icon.svg',
+              type: 'image/svg+xml'
+            },
+            {
+              src: '/pwa-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'any maskable'
+            },
+            {
+              src: '/pwa-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any maskable'
+            }
+          ]
         }
       })
     ],

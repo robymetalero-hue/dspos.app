@@ -324,12 +324,25 @@ export default function ConfiguracionesView() {
     const [importError, setImportError] = useState<string | null>(null);
     const [importSuccess, setImportSuccess] = useState<boolean>(false);
 
+    // Restore validation modal states
+    const [restoreValidationData, setRestoreValidationData] = useState<any | null>(null);
+    const [isRestoreModalOpen, setIsRestoreModalOpen] = useState<boolean>(false);
+    const [isValidatingFile, setIsValidatingFile] = useState<boolean>(false);
+
     const isAdmin = user?.role === 'admin';
 
     const handleDownloadBackup = async () => {
         setIsBackingUp(true);
         try {
-            const res = await fetch('/api/backup', { headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` } });
+            const token = localStorage.getItem('auth_token') || '';
+            const res = await fetch('/api/backup', { 
+                headers: { 
+                    'Authorization': `Bearer ${token}`,
+                    'x-user-role': user?.role || 'admin',
+                    'x-user-name': user?.username || 'admin'
+                } 
+            });
+
             if (!res.ok) {
                 let errMsg = "No se pudo obtener el archivo de respaldo";
                 try {
@@ -338,19 +351,38 @@ export default function ConfiguracionesView() {
                 } catch(e) {}
                 throw new Error(errMsg);
             }
-            const blob = await res.blob();
+
+            const data = await res.json();
+            const totalRecords = data.metadata?.totalRecords || 0;
+            const totalTables = data.metadata?.totalTables || 0;
+
+            // Generate clean downloadable JSON blob with explicit charset
+            const jsonString = JSON.stringify(data, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
             const url = window.URL.createObjectURL(blob);
+            
             const a = document.createElement('a');
             a.href = url;
-            a.download = `Copia_Seguridad_GTR_POS_${new Date().toISOString().split('T')[0]}.json`;
+            const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            a.download = `gtrpos_backup_${dateStr}.json`;
             document.body.appendChild(a);
             a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
-            showNotification?.("✓ Copia de seguridad descargada exitosamente.", "success");
+            
+            setTimeout(() => {
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            }, 500);
+
+            showNotification?.(`✓ Copia de seguridad exportada con éxito (${totalRecords} registros en ${totalTables} tablas).`, "success");
         } catch (err: any) {
-            console.error(err);
-            showNotification?.("Error al descargar copia de seguridad: " + err.message, "error");
+            console.error("Backup download error:", err);
+            // Fallback to direct download URL if blob download is obstructed by iframe/PWA
+            try {
+                window.location.href = '/api/backup?download=true';
+                showNotification?.("Iniciando descarga directa de respaldo...", "info");
+            } catch (fallbackErr) {
+                showNotification?.("Error al descargar copia de seguridad: " + err.message, "error");
+            }
         } finally {
             setIsBackingUp(false);
         }
@@ -359,7 +391,7 @@ export default function ConfiguracionesView() {
     const handleDriveBackup = async () => {
         setIsBackingUp(true);
         try {
-            showNotification?.("Iniciando respaldo en Google Drive...", "success");
+            showNotification?.("Iniciando respaldo en Google Drive...", "info");
             const backupSuccess = await backupDatabaseToDrive();
             if (backupSuccess) {
                 showNotification?.("✓ Respaldo subido exitosamente a Google Drive.", "success");
@@ -372,22 +404,11 @@ export default function ConfiguracionesView() {
         }
     };
 
-    const handleImportBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleSelectBackupFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
 
-        const confirmRestore = window.confirm(
-            "⚠️ ¡ATENCIÓN CRÍTICA! ⚠️\n\n¿Está absolutamente seguro de que desea restaurar esta copia de seguridad?\n" +
-            "Esto borrará todos los registros locales actuales (ventas, clientes, productos, usuarios) " +
-            "y los reemplazará de forma irreversible por los datos contenidos en el archivo de respaldo.\n\n" +
-            "Haga clic en 'Aceptar' solo si desea continuar."
-        );
-        if (!confirmRestore) {
-            event.target.value = ""; // reset input
-            return;
-        }
-
-        setIsImporting(true);
+        setIsValidatingFile(true);
         setImportError(null);
         setImportSuccess(false);
 
@@ -395,34 +416,37 @@ export default function ConfiguracionesView() {
             const reader = new FileReader();
             reader.onload = async (e) => {
                 try {
-                    const parsed = JSON.parse(e.target?.result as string);
-                    if (!parsed || !parsed.data) {
-                        throw new Error("El archivo no tiene el formato JSON de respaldo oficial de GTR POS.");
+                    const text = e.target?.result as string;
+                    let parsed: any;
+                    try {
+                        parsed = JSON.parse(text);
+                    } catch (parseErr) {
+                        throw new Error("El archivo seleccionado no es un archivo JSON válido o está corrupto.");
                     }
 
-                    const res = await fetch('/api/backup/import', {
+                    // Validate via backend endpoint
+                    const valRes = await fetch('/api/backup/validate', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ data: parsed.data })
+                        body: JSON.stringify(parsed)
                     });
 
-                    if (res.ok) {
-                        setImportSuccess(true);
-                        showNotification?.("✓ ¡Base de datos restaurada con éxito! Sincronización en la nube reactivada.", "success");
-                        if (fetchExchangeRate) fetchExchangeRate();
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 2000);
-                    } else {
-                        const data = await res.json();
-                        throw new Error(data.error || "Error indeterminado del servidor");
+                    const valData = await valRes.json();
+                    if (!valRes.ok || !valData.valid) {
+                        throw new Error(valData.error || "Formato de archivo de respaldo no compatible.");
                     }
+
+                    setRestoreValidationData({
+                        filePayload: parsed,
+                        validation: valData
+                    });
+                    setIsRestoreModalOpen(true);
                 } catch (err: any) {
-                    console.error("Reader error:", err);
+                    console.error("Validation error:", err);
                     setImportError(err.message);
-                    showNotification?.("Fallo de restauración: " + err.message, "error");
+                    showNotification?.("Error al validar archivo: " + err.message, "error");
                 } finally {
-                    setIsImporting(false);
+                    setIsValidatingFile(false);
                     event.target.value = ""; // Reset file input
                 }
             };
@@ -430,8 +454,48 @@ export default function ConfiguracionesView() {
         } catch (err: any) {
             console.error(err);
             setImportError(err.message);
-            setIsImporting(false);
+            setIsValidatingFile(false);
             event.target.value = "";
+        }
+    };
+
+    const handleExecuteRestore = async () => {
+        if (!restoreValidationData?.filePayload) return;
+
+        setIsImporting(true);
+        setImportError(null);
+
+        try {
+            const res = await fetch('/api/backup/import', {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-user-role': user?.role || 'admin',
+                    'x-user-name': user?.username || 'admin'
+                },
+                body: JSON.stringify(restoreValidationData.filePayload)
+            });
+
+            const data = await res.json();
+
+            if (res.ok && data.success) {
+                setImportSuccess(true);
+                setIsRestoreModalOpen(false);
+                setRestoreValidationData(null);
+                showNotification?.(`✓ ${data.message}`, "success");
+                if (fetchExchangeRate) fetchExchangeRate();
+                setTimeout(() => {
+                    window.location.reload();
+                }, 2000);
+            } else {
+                throw new Error(data.error || "Fallo indeterminado al restaurar base de datos.");
+            }
+        } catch (err: any) {
+            console.error("Restore Execution Error:", err);
+            setImportError(err.message);
+            showNotification?.("Error al restaurar: " + err.message, "error");
+        } finally {
+            setIsImporting(false);
         }
     };
 
@@ -1602,24 +1666,24 @@ export default function ConfiguracionesView() {
                             </button>
 
                             {/* Import File Button wrapper */}
-                            <label className={`p-4 bg-white hover:bg-slate-50/80 dark:bg-[#0c111e] dark:hover:bg-slate-900/60 border border-slate-205 dark:border-slate-850 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-[#6366f1]/40 relative ${isImporting ? 'opacity-65 pointer-events-none' : ''} animate-in fade-in`}>
+                            <label className={`p-4 bg-white hover:bg-slate-50/80 dark:bg-[#0c111e] dark:hover:bg-slate-900/60 border border-slate-205 dark:border-slate-850 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-[#6366f1]/40 relative ${isImporting || isValidatingFile ? 'opacity-65 pointer-events-none' : ''} animate-in fade-in`}>
                                 <input
                                     type="file"
                                     accept=".json"
-                                    onChange={handleImportBackup}
+                                    onChange={handleSelectBackupFile}
                                     className="hidden"
-                                    disabled={isBackingUp || isImporting}
+                                    disabled={isBackingUp || isImporting || isValidatingFile}
                                 />
-                                {isImporting ? (
+                                {isImporting || isValidatingFile ? (
                                     <RefreshCw size={22} className="text-[#6366f1] animate-spin" />
                                 ) : (
                                     <Upload size={22} className="text-[#6366f1] transition group-hover:scale-110" />
                                 )}
                                 <div className="flex flex-col gap-0.5">
                                     <span className="text-[11.5px] font-extrabold text-slate-800 dark:text-slate-200">
-                                        {isImporting ? 'Restaurando...' : 'Importar Copia JSON'}
+                                        {isImporting ? 'Restaurando...' : isValidatingFile ? 'Validando Archivo...' : 'Importar Copia JSON'}
                                     </span>
-                                    <span className="text-[9px] font-bold text-slate-400">Restablecer datos guardados</span>
+                                    <span className="text-[9px] font-bold text-slate-400">Integrar datos de respaldo</span>
                                 </div>
                             </label>
 
@@ -1899,6 +1963,146 @@ export default function ConfiguracionesView() {
                             </h2>
                             <p className="text-[10.5px] font-semibold opacity-85 mt-0.5">La aplicación se está ejecutando de forma nativa e independiente en este dispositivo con soporte offline completo.</p>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL DE CONFIRMACIÓN Y AUDITORÍA DE RESTAURACIÓN DE BASE DE DATOS */}
+            {isRestoreModalOpen && restoreValidationData && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-[#0c111e] border border-slate-200 dark:border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
+                        
+                        {/* Modal Header */}
+                        <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-850 pb-4">
+                            <div className="flex items-center gap-3">
+                                <div className="p-3 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-2xl shrink-0">
+                                    <FileJson size={24} />
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-extrabold text-slate-800 dark:text-slate-100 tracking-tight">
+                                        Validación e Integración de Base de Datos
+                                    </h3>
+                                    <p className="text-[11px] font-semibold text-slate-400">
+                                        Se verificó la integridad del archivo de respaldo JSON seleccionado.
+                                    </p>
+                                </div>
+                            </div>
+                            <button 
+                                type="button"
+                                onClick={() => {
+                                    setIsRestoreModalOpen(false);
+                                    setRestoreValidationData(null);
+                                }}
+                                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Integrity Checksum Badge */}
+                        <div className={`p-3.5 rounded-2xl border text-xs font-bold flex items-center justify-between gap-3 ${
+                            restoreValidationData.validation.checksumValid 
+                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' 
+                                : 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                        }`}>
+                            <div className="flex items-center gap-2">
+                                <ShieldCheck size={18} className="shrink-0" />
+                                <span>{restoreValidationData.validation.checksumMessage || "✓ Archivo 100% verificado e íntegro"}</span>
+                            </div>
+                            <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded-md bg-white/40 dark:bg-black/30">
+                                GTR POS v2.0
+                            </span>
+                        </div>
+
+                        {/* Metadata Summary */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-900/40 p-4 rounded-2xl border border-slate-100 dark:border-slate-850 text-center">
+                            <div>
+                                <span className="text-[9px] font-extrabold uppercase text-slate-400 block">Total Tablas</span>
+                                <span className="text-sm font-black text-slate-800 dark:text-slate-200">
+                                    {restoreValidationData.validation.totalTables || 0}
+                                </span>
+                            </div>
+                            <div>
+                                <span className="text-[9px] font-extrabold uppercase text-slate-400 block">Total Registros</span>
+                                <span className="text-sm font-black text-indigo-600 dark:text-indigo-400">
+                                    {restoreValidationData.validation.totalRecords?.toLocaleString() || 0}
+                                </span>
+                            </div>
+                            <div>
+                                <span className="text-[9px] font-extrabold uppercase text-slate-400 block">Creado Por</span>
+                                <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                                    {restoreValidationData.validation.metadata?.createdBy || 'admin'}
+                                </span>
+                            </div>
+                            <div>
+                                <span className="text-[9px] font-extrabold uppercase text-slate-400 block">Fecha Generación</span>
+                                <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300 truncate block">
+                                    {restoreValidationData.validation.metadata?.createdAt ? new Date(restoreValidationData.validation.metadata.createdAt).toLocaleString('es-ES') : 'Reciente'}
+                                </span>
+                            </div>
+                        </div>
+
+                        {/* Detailed Record Breakdown */}
+                        <div className="flex flex-col gap-2">
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                                Desglose de Registros a Reintegrar:
+                            </span>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-40 overflow-y-auto p-2 bg-slate-50/50 dark:bg-slate-900/20 rounded-xl border border-slate-100 dark:border-slate-850">
+                                {Object.entries(restoreValidationData.validation.recordCounts || {}).map(([table, count]) => (
+                                    <div key={table} className="flex items-center justify-between p-2 bg-white dark:bg-[#0c111e] rounded-lg border border-slate-100 dark:border-slate-800 text-[10.5px]">
+                                        <span className="font-bold text-slate-600 dark:text-slate-400 truncate">{table}</span>
+                                        <span className="font-black text-indigo-500 ml-1">{String(count)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Critical Warning Notice */}
+                        <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-600 dark:text-rose-400 text-xs font-bold flex items-start gap-3">
+                            <ShieldAlert size={20} className="shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                                <span className="font-extrabold block uppercase tracking-wide">
+                                    ⚠️ Reemplazo Total de la Base de Datos
+                                </span>
+                                <p className="text-[11px] font-medium leading-relaxed opacity-90">
+                                    Al confirmar, el sistema reemplazará de forma atómica y completa la base de datos actual con todos los usuarios, productos, historial de caja, ventas e ítems del archivo importado. Se mantendrán intactos todos los IDs y relaciones originales.
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Modal Action Buttons */}
+                        <div className="flex items-center justify-end gap-3 pt-2">
+                            <button
+                                type="button"
+                                disabled={isImporting}
+                                onClick={() => {
+                                    setIsRestoreModalOpen(false);
+                                    setRestoreValidationData(null);
+                                }}
+                                className="px-5 py-3 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 text-xs font-extrabold hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="button"
+                                disabled={isImporting}
+                                onClick={handleExecuteRestore}
+                                className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-indigo-500/20 flex items-center gap-2 cursor-pointer transition disabled:opacity-50"
+                            >
+                                {isImporting ? (
+                                    <>
+                                        <RefreshCw size={14} className="animate-spin" />
+                                        <span>Restaurando Base de Datos...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Upload size={14} />
+                                        <span>Confirmar e Importar Ahora</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+
                     </div>
                 </div>
             )}

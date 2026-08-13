@@ -2,14 +2,25 @@ import { safeDispatchEvent } from "../utils/events";
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, CartItem, Product, Client, ReceiptTemplate, Department, SaleTab, RgbThemeSettings } from '../types';
 import { normalizePermissions } from '../utils/permissions';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, onSnapshot, getDocFromServer, setLogLevel } from 'firebase/firestore';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { initializeFirestore, getFirestore, doc, setDoc, onSnapshot, getDocFromServer, setLogLevel } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { getOfflineSales, deleteOfflineSale, getOfflineActions, deleteOfflineAction, saveOfflineAction, hasOfflineActions, hasOfflineSales, cacheAppState, getCachedAppState } from '../utils/offlineStorage';
 
-// Initialize Client-Side Firebase SDK
-const app = initializeApp(firebaseConfig);
-export const firestoreDb = (firebaseConfig as any).firestoreDatabaseId ? getFirestore(app, (firebaseConfig as any).firestoreDatabaseId) : getFirestore(app);
+// Initialize Client-Side Firebase SDK with auto-detect long polling to prevent stream timeouts
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+const dbId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
+
+let firestoreInstance;
+try {
+  firestoreInstance = initializeFirestore(app, {
+    experimentalAutoDetectLongPolling: true,
+  }, dbId);
+} catch (e) {
+  firestoreInstance = dbId && dbId !== '(default)' ? getFirestore(app, dbId) : getFirestore(app);
+}
+
+export const firestoreDb = firestoreInstance;
 
 // Silence internal Firestore SDK connection logs (warnings/info)
 try {
@@ -973,7 +984,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             
             if (data && Array.isArray(data.products)) {
                 setProducts(prev => {
-                    const merged = [...prev, ...data.products];
+                    const existingIds = new Set(prev.map(p => p.id));
+                    const newItems = data.products.filter((p: any) => !existingIds.has(p.id));
+                    const merged = [...prev, ...newItems];
                     // Save merged set in cache to prevent offline gaps
                     localStorage.setItem('cached_products', JSON.stringify(merged));
                     cacheAppState('cached_products', merged);

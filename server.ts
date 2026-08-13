@@ -4,11 +4,13 @@ import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import jwt from "jsonwebtoken";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { db, getBoliviaISOString, insertSystemAuditLog } from "./database.ts";
+import { normalizeProductName } from "./src/utils/productUtils.ts";
 import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData } from "./firebaseSync.ts";
 import { collection, getDocs } from "firebase/firestore";
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration } from "@google/genai";
@@ -1764,82 +1766,251 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
+  // DIAGNÓSTICO DE DUPLICADOS EN CATÁLOGO (SOLO LECTURA)
+  app.get("/api/products/diagnose-duplicates", (req, res) => {
+    try {
+      const allProducts = db.prepare(`
+        SELECT p.id, p.name, p.category, p.sku, p.stock, p.price_unit, p.price_cost, p.updated_at
+        FROM products p
+        ORDER BY p.id ASC
+      `).all() as any[];
+
+      const nameGroupsMap = new Map<string, any[]>();
+      const skuGroupsMap = new Map<string, any[]>();
+
+      allProducts.forEach(prod => {
+        const normName = normalizeProductName(prod.name);
+        if (normName) {
+          if (!nameGroupsMap.has(normName)) nameGroupsMap.set(normName, []);
+          nameGroupsMap.get(normName)!.push(prod);
+        }
+
+        const normSku = String(prod.sku || '').trim().toLowerCase();
+        if (normSku) {
+          if (!skuGroupsMap.has(normSku)) skuGroupsMap.set(normSku, []);
+          skuGroupsMap.get(normSku)!.push(prod);
+        }
+      });
+
+      const duplicateGroups: any[] = [];
+
+      // Process Name groups
+      nameGroupsMap.forEach((prods, normName) => {
+        if (prods.length > 1) {
+          const groupProducts = prods.map(p => {
+            const salesCount = (db.prepare('SELECT COUNT(*) as c FROM sale_items WHERE product_id = ?').get(p.id) as any)?.c || 0;
+            const auditCount = (db.prepare('SELECT COUNT(*) as c FROM inventory_audit_logs WHERE product_id = ?').get(p.id) as any)?.c || 0;
+            const arrivalsCount = (db.prepare('SELECT COUNT(*) as c FROM stock_arrivals WHERE product_id = ?').get(p.id) as any)?.c || 0;
+            return {
+              ...p,
+              sales_count: salesCount,
+              audit_count: auditCount,
+              arrivals_count: arrivalsCount
+            };
+          });
+
+          duplicateGroups.push({
+            id: `group-name-${normName}`,
+            type: 'Nombre Normalizado Idéntico',
+            normalizedKey: normName,
+            riskLevel: 'ALTO',
+            description: `Se encontraron ${prods.length} registros que comparten el mismo nombre comercial ("${prods[0].name}").`,
+            products: groupProducts
+          });
+        }
+      });
+
+      // Process SKU groups
+      skuGroupsMap.forEach((prods, normSku) => {
+        if (prods.length > 1) {
+          const isAlreadyCaptured = duplicateGroups.some(g => prods.every(p => g.products.some((gp: any) => gp.id === p.id)));
+          if (!isAlreadyCaptured) {
+            const groupProducts = prods.map(p => {
+              const salesCount = (db.prepare('SELECT COUNT(*) as c FROM sale_items WHERE product_id = ?').get(p.id) as any)?.c || 0;
+              const auditCount = (db.prepare('SELECT COUNT(*) as c FROM inventory_audit_logs WHERE product_id = ?').get(p.id) as any)?.c || 0;
+              const arrivalsCount = (db.prepare('SELECT COUNT(*) as c FROM stock_arrivals WHERE product_id = ?').get(p.id) as any)?.c || 0;
+              return {
+                ...p,
+                sales_count: salesCount,
+                audit_count: auditCount,
+                arrivals_count: arrivalsCount
+              };
+            });
+
+            duplicateGroups.push({
+              id: `group-sku-${normSku}`,
+              type: 'SKU Duplicado Exacto',
+              normalizedKey: normSku,
+              riskLevel: 'CRÍTICO',
+              description: `Se encontraron ${prods.length} registros que comparten el mismo SKU (${normSku}).`,
+              products: groupProducts
+            });
+          }
+        }
+      });
+
+      const totalImpactedProducts = new Set(duplicateGroups.flatMap(g => g.products.map((p: any) => p.id))).size;
+
+      res.json({
+        success: true,
+        totalProductsCatalog: allProducts.length,
+        totalDuplicateGroups: duplicateGroups.length,
+        totalImpactedProducts,
+        duplicateGroups,
+        note: "Diagnóstico de solo lectura. Ningún dato, stock ni historial ha sido borrado o modificado automáticamente."
+      });
+    } catch (err: any) {
+      console.error("[Diagnose Duplicates Error]:", err);
+      res.status(500).json({ error: "Error al generar diagnóstico de duplicados: " + err.message });
+    }
+  });
+
   app.post("/api/products", enforcePermission('add_products'), (req, res) => {
-    const { name, category, sku, stock, price_unit, price_bulk, price_cost, stock_alarm, image } = req.body;
+    const { name, category, sku, stock, price_unit, price_bulk, price_cost, stock_alarm, image, clientOperationId, forceCreate } = req.body;
     if (!name || !name.trim() || !sku || !sku.trim() || !category || !category.trim()) {
       return res.status(400).json({ error: "El nombre, SKU y categoría son obligatorios." });
     }
+
+    const trimmedName = name.trim();
+    const trimmedSku = sku.trim();
+    const trimmedCategory = category.trim();
+
+    // 1. Check Idempotency Key
+    if (clientOperationId && typeof clientOperationId === 'string') {
+      try {
+        const processed = db.prepare('SELECT result FROM processed_operations WHERE id = ?').get(clientOperationId) as any;
+        if (processed && processed.result) {
+          console.log(`[Idempotency Hit] Product operation ${clientOperationId} already processed.`);
+          return res.json(JSON.parse(processed.result));
+        }
+      } catch (idempErr) {
+        console.warn("[Idempotency Check Warning]:", idempErr);
+      }
+    }
+
+    // 2. Check SKU Uniqueness
+    const existingSku = db.prepare('SELECT id, name, sku, stock, price_unit FROM products WHERE LOWER(TRIM(sku)) = LOWER(?)').get(trimmedSku.toLowerCase()) as any;
+    if (existingSku) {
+      return res.status(400).json({
+        error: `Ya existe un producto registrado con el SKU "${trimmedSku}".`,
+        existingProduct: {
+          id: existingSku.id,
+          name: existingSku.name,
+          sku: existingSku.sku,
+          stock: existingSku.stock,
+          price_unit: existingSku.price_unit
+        }
+      });
+    }
+
+    // 3. Check Normalized Name Duplicate Warning (unless forceCreate is true)
+    if (!forceCreate) {
+      const normInput = normalizeProductName(trimmedName);
+      const allProds = db.prepare('SELECT id, name, sku, stock, price_unit FROM products').all() as any[];
+      const existingNameMatch = allProds.find(p => normalizeProductName(p.name) === normInput);
+      if (existingNameMatch) {
+        return res.status(400).json({
+          duplicateWarning: true,
+          error: `Encontramos un producto potencialmente duplicado con el nombre "${existingNameMatch.name}" (#${existingNameMatch.id}, SKU: ${existingNameMatch.sku}).`,
+          existingProduct: {
+            id: existingNameMatch.id,
+            name: existingNameMatch.name,
+            sku: existingNameMatch.sku,
+            stock: existingNameMatch.stock,
+            price_unit: existingNameMatch.price_unit
+          }
+        });
+      }
+    }
+
     const safeStock = Math.max(0, Number(stock || 0));
     const safePriceUnit = Math.max(0, Number(price_unit || 0));
     const safePriceBulk = Math.max(0, Number(price_bulk || 0));
     const safePriceCost = Math.max(0, Number(price_cost !== undefined ? price_cost : (price_unit ? price_unit * 0.6 : 0)));
     const safeStockAlarm = Math.max(0, Number(stock_alarm || 0));
+
     try {
       const nowIso = getBoliviaISOString();
-      const result = db.prepare('INSERT INTO products (name, category, sku, stock, price_unit, price_bulk, price_cost, stock_alarm, image, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(name.trim(), category.trim(), sku.trim(), safeStock, safePriceUnit, safePriceBulk, safePriceCost, safeStockAlarm, image || null, nowIso);
       
-      // Audit creation
-      const auditUser = (req as any).auditUser || {};
-      const sysLogId = insertSystemAuditLog({
-        eventType: 'creacion_producto',
-        category: 'productos',
-        module: 'inventario',
-        action: `Creación de nuevo producto: ${name.trim()} con stock inicial de ${safeStock}`,
-        severity: 'info',
-        entityType: 'producto',
-        entityId: result.lastInsertRowid,
-        entityName: name.trim(),
-        userId: auditUser.userId,
-        userName: auditUser.userName || 'admin',
-        userRole: auditUser.userRole,
-        quantityBefore: 0,
-        quantityChanged: safeStock,
-        quantityAfter: safeStock,
-        priceBefore: 0,
-        priceAfter: safePriceUnit,
-        reason: 'Creación inicial de producto',
-        afterData: { name: name.trim(), category: category.trim(), sku: sku.trim(), stock: safeStock, price_unit: safePriceUnit, price_bulk: safePriceBulk, price_cost: safePriceCost, stock_alarm: safeStockAlarm },
-        relatedProductId: result.lastInsertRowid,
-        status: 'success'
-      });
+      const responseData = db.transaction(() => {
+        const result = db.prepare('INSERT INTO products (name, category, sku, stock, price_unit, price_bulk, price_cost, stock_alarm, image, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(trimmedName, trimmedCategory, trimmedSku, safeStock, safePriceUnit, safePriceBulk, safePriceCost, safeStockAlarm, image || null, nowIso);
+        
+        const newProdId = result.lastInsertRowid;
 
-      let invLogId: any = null;
-      if (safeStock > 0) {
-        const normUserId = auditUser.userId || 1;
-        const normUsername = auditUser.userName || 'admin';
-        const invRes = db.prepare(`
-          INSERT INTO inventory_audit_logs 
-          (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
-          VALUES (?, ?, ?, 'ingreso_compra', ?, ?, ?, ?, 'Stock Inicial', 'Registro inicial al crear producto', ?)
-        `).run(
-          result.lastInsertRowid, 
-          name.trim(), 
-          sku.trim(), 
-          safeStock, 
-          safePriceCost, 
-          normUserId, 
-          normUsername,
-          getBoliviaISOString()
-        );
-        invLogId = invRes.lastInsertRowid;
-      }
+        // Audit creation
+        const auditUser = (req as any).auditUser || {};
+        const sysLogId = insertSystemAuditLog({
+          eventType: 'creacion_producto',
+          category: 'productos',
+          module: 'inventario',
+          action: `Creación de nuevo producto: ${trimmedName} con stock inicial de ${safeStock}`,
+          severity: 'info',
+          entityType: 'producto',
+          entityId: newProdId,
+          entityName: trimmedName,
+          userId: auditUser.userId,
+          userName: auditUser.userName || 'admin',
+          userRole: auditUser.userRole,
+          quantityBefore: 0,
+          quantityChanged: safeStock,
+          quantityAfter: safeStock,
+          priceBefore: 0,
+          priceAfter: safePriceUnit,
+          reason: 'Creación inicial de producto',
+          afterData: { name: trimmedName, category: trimmedCategory, sku: trimmedSku, stock: safeStock, price_unit: safePriceUnit, price_bulk: safePriceBulk, price_cost: safePriceCost, stock_alarm: safeStockAlarm },
+          relatedProductId: newProdId,
+          status: 'success'
+        });
 
-      const syncMap: Record<string, any[]> = {
-        products: [result.lastInsertRowid]
-      };
-      if (sysLogId) {
-        syncMap.system_audit_logs = [sysLogId];
-      }
-      if (invLogId) {
-        syncMap.inventory_audit_logs = [invLogId];
-      }
+        let invLogId: any = null;
+        if (safeStock > 0) {
+          const normUserId = auditUser.userId || 1;
+          const normUsername = auditUser.userName || 'admin';
+          const invRes = db.prepare(`
+            INSERT INTO inventory_audit_logs 
+            (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
+            VALUES (?, ?, ?, 'ingreso_compra', ?, ?, ?, ?, 'Stock Inicial', 'Registro inicial al crear producto', ?)
+          `).run(
+            newProdId, 
+            trimmedName, 
+            trimmedSku, 
+            safeStock, 
+            safePriceCost, 
+            normUserId, 
+            normUsername,
+            getBoliviaISOString()
+          );
+          invLogId = invRes.lastInsertRowid;
+        }
 
-      syncAfterWrite(syncMap);
-      checkAndNotifyLowStock(result.lastInsertRowid);
-      res.json({ success: true, id: result.lastInsertRowid });
+        const syncMap: Record<string, any[]> = {
+          products: [newProdId]
+        };
+        if (sysLogId) syncMap.system_audit_logs = [sysLogId];
+        if (invLogId) syncMap.inventory_audit_logs = [invLogId];
+
+        syncAfterWrite(syncMap);
+        checkAndNotifyLowStock(newProdId);
+
+        const resPayload = { success: true, id: newProdId };
+
+        if (clientOperationId && typeof clientOperationId === 'string') {
+          try {
+            db.prepare('INSERT OR REPLACE INTO processed_operations (id, type, result) VALUES (?, ?, ?)')
+              .run(clientOperationId, 'product_creation', JSON.stringify(resPayload));
+          } catch (idempSaveErr) {
+            console.warn("[Idempotency Save Warning]:", idempSaveErr);
+          }
+        }
+
+        return resPayload;
+      })();
+
+      res.json(responseData);
     } catch (e: any) {
-      res.status(400).json({ error: "SKU duplicado o campos incorrectos." });
+      console.error("[Create Product Error]:", e);
+      res.status(400).json({ error: e.message || "SKU duplicado o campos incorrectos." });
     }
   });
 
@@ -2802,113 +2973,230 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
   app.get("/api/backup", (req, res) => {
     try {
-      const TABLE_NAMES = [
-        'users',
-        'products',
-        'clients',
-        'sales',
-        'sale_items',
-        'shifts',
-        'settings',
-        'exchange_rate_audit',
-        'caja_cierres',
-        'departments',
-        'stock_arrivals',
-        'pending_sales',
-        'pending_sale_items',
-        'accounts_receivable',
-        'credit_payments',
-        'pending_sale_payments',
-        'inventory_audit_logs',
-        'cash_accounts',
-        'cash_movements',
-        'cash_settlements',
-        'inventory_counts',
-        'inventory_count_items',
-        'system_audit_logs',
-      ];
-      const backupData: any = {};
-      for (const table of TABLE_NAMES) {
-        backupData[table] = db.prepare(`SELECT * FROM ${table}`).all();
-      }
-      res.json({
+      // Dynamically discover all user tables in SQLite database to guarantee 100% table coverage
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'gsi_%'").all() as { name: string }[];
+      const tableNames = tables.map(t => t.name);
+
+      const backupData: Record<string, any[]> = {};
+      const recordCounts: Record<string, number> = {};
+      let totalRecords = 0;
+
+      // Wrap in a single read transaction to ensure point-in-time consistency
+      db.transaction(() => {
+        for (const table of tableNames) {
+          const rows = db.prepare(`SELECT * FROM "${table}"`).all();
+          backupData[table] = rows;
+          recordCounts[table] = rows.length;
+          totalRecords += rows.length;
+        }
+      })();
+
+      // Cryptographic SHA-256 Checksum calculation over full data string
+      const dataStr = JSON.stringify(backupData);
+      const checksum = crypto.createHash('sha256').update(dataStr).digest('hex');
+
+      const nowIso = getBoliviaISOString();
+      const auditUser = (req as any).auditUser || {};
+      const userName = auditUser.userName || (req.headers['x-user-name'] ? String(req.headers['x-user-name']) : 'admin');
+
+      const payload = {
         metadata: {
-          version: "2.0",
-          timestamp: new Date().toISOString(),
-          app: "GTR POS"
+          format: "GTRPOS_BACKUP",
+          backupVersion: "2.0",
+          schemaVersion: "2026.1",
+          applicationVersion: "2.0",
+          createdAt: nowIso,
+          createdBy: userName,
+          environment: "production",
+          databaseType: "SQLite / Google Cloud Firestore",
+          totalTables: tableNames.length,
+          totalRecords,
+          recordCounts,
+          checksum
         },
+        manifest: tableNames.map(name => ({ entity: name, count: recordCounts[name] || 0 })),
         data: backupData
-      });
+      };
+
+      try {
+        insertSystemAuditLog({
+          eventType: 'BACKUP_EXPORT_COMPLETED',
+          category: 'sistema',
+          module: 'respaldos',
+          action: `Exportación completa de respaldo JSON (${totalRecords} registros en ${tableNames.length} tablas)`,
+          severity: 'info',
+          userName: userName,
+          reason: 'Generación manual de respaldo JSON'
+        });
+      } catch (auditErr) {
+        console.warn("[Backup Audit Warning]:", auditErr);
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `gtrpos_backup_${timestamp}.json`;
+
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+      if (req.query.download === 'true') {
+        return res.send(JSON.stringify(payload, null, 2));
+      }
+
+      res.json(payload);
     } catch (e: any) {
+      console.error("[Export Backup Error]:", e);
       res.status(500).json({ error: "No se pudo generar la copia de seguridad: " + e.message });
+    }
+  });
+
+  // Validation endpoint prior to restoring backup
+  app.post("/api/backup/validate", (req, res) => {
+    try {
+      const backupContent = req.body;
+      if (!backupContent || typeof backupContent !== 'object') {
+        return res.status(400).json({ valid: false, error: "Estructura JSON no válida o cuerpo vacío." });
+      }
+
+      const data = backupContent.data || backupContent;
+      if (!data || typeof data !== 'object') {
+        return res.status(400).json({ valid: false, error: "No se encontraron tablas de datos ('data') en el archivo JSON." });
+      }
+
+      const tablesFound = Object.keys(data).filter(k => Array.isArray(data[k]));
+      if (tablesFound.length === 0) {
+        return res.status(400).json({ valid: false, error: "El archivo no contiene colecciones o tablas válidas." });
+      }
+
+      const recordCounts: Record<string, number> = {};
+      let totalRecords = 0;
+      for (const table of tablesFound) {
+        const count = data[table].length;
+        recordCounts[table] = count;
+        totalRecords += count;
+      }
+
+      let checksumValid = true;
+      let checksumMessage = "Sin checksum previo (Formato estándar/anterior)";
+      if (backupContent.metadata?.checksum) {
+        const computedHash = crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+        if (computedHash === backupContent.metadata.checksum) {
+          checksumMessage = "✓ Checksum verificado y 100% íntegro";
+        } else {
+          checksumValid = false;
+          checksumMessage = "⚠️ El checksum no coincide (posible modificación o truncado manual)";
+        }
+      }
+
+      res.json({
+        valid: true,
+        metadata: backupContent.metadata || {
+          format: "LEGACY / STANDARD JSON",
+          createdAt: new Date().toISOString(),
+          backupVersion: "1.0"
+        },
+        checksumValid,
+        checksumMessage,
+        totalTables: tablesFound.length,
+        totalRecords,
+        recordCounts,
+        tablesFound
+      });
+    } catch (err: any) {
+      res.status(400).json({ valid: false, error: "Error al validar el archivo de respaldo: " + err.message });
     }
   });
 
   app.post("/api/backup/import", async (req, res) => {
     try {
       const { data } = req.body;
-      if (!data) {
+      const rawData = data || req.body.backupData || req.body;
+
+      if (!rawData || typeof rawData !== 'object') {
         return res.status(400).json({ error: "Datos de respaldo no proporcionados o vacíos en el cuerpo de la petición." });
       }
 
-      const TABLE_NAMES = [
-        'users',
-        'products',
-        'clients',
-        'sales',
-        'sale_items',
-        'shifts',
-        'settings',
-        'exchange_rate_audit',
-        'caja_cierres',
-        'departments',
-        'stock_arrivals',
-        'pending_sales',
-        'pending_sale_items',
-        'accounts_receivable',
-        'credit_payments',
-        'pending_sale_payments',
-        'inventory_audit_logs',
-        'cash_accounts',
-        'cash_movements',
-        'cash_settlements',
-        'inventory_counts',
-        'inventory_count_items',
-        'system_audit_logs'
-      ];
+      let totalRestoredRows = 0;
+      const restoredRecordCounts: Record<string, number> = {};
 
-      // Perform a full transaction write after deleting existing SQLite rows
+      // Execute restoration within a single atomic transaction
       const importTx = db.transaction(() => {
-        for (const table of TABLE_NAMES) {
-          if (data[table] && Array.isArray(data[table])) {
-            db.prepare(`DELETE FROM ${table}`).run();
-            const rows = data[table];
-            if (rows.length === 0) continue;
+        // Temporarily disable foreign keys to allow mass restoration regardless of table order
+        db.pragma('foreign_keys = OFF');
 
-            const firstRowKeys = Object.keys(rows[0]);
-            const placeholders = firstRowKeys.map(() => '?').join(', ');
-            const insertSql = `INSERT OR REPLACE INTO ${table} (${firstRowKeys.join(', ')}) VALUES (${placeholders})`;
-            const stmt = db.prepare(insertSql);
-            
-            for (const r of rows) {
-              const values = firstRowKeys.map(k => r[k]);
-              stmt.run(...values);
+        for (const tableName of Object.keys(rawData)) {
+          if (!Array.isArray(rawData[tableName])) continue;
+
+          const rows = rawData[tableName];
+          restoredRecordCounts[tableName] = rows.length;
+
+          try {
+            db.prepare(`DELETE FROM "${tableName}"`).run();
+          } catch (delErr: any) {
+            console.warn(`[Restore Warning] Could not clear table ${tableName}:`, delErr.message);
+          }
+
+          if (rows.length === 0) continue;
+
+          // Collect all column names across all rows
+          const allKeysSet = new Set<string>();
+          for (const r of rows) {
+            if (r && typeof r === 'object') {
+              Object.keys(r).forEach(k => allKeysSet.add(k));
             }
           }
+          const colNames = Array.from(allKeysSet);
+          if (colNames.length === 0) continue;
+
+          const placeholders = colNames.map(() => '?').join(', ');
+          const insertSql = `INSERT OR REPLACE INTO "${tableName}" (${colNames.map(c => `"${c}"`).join(', ')}) VALUES (${placeholders})`;
+          const stmt = db.prepare(insertSql);
+
+          for (const r of rows) {
+            const values = colNames.map(col => r[col] !== undefined ? r[col] : null);
+            stmt.run(...values);
+            totalRestoredRows++;
+          }
         }
+
+        // Re-enable foreign key constraints
+        db.pragma('foreign_keys = ON');
       });
 
       importTx();
 
-      // Enforce instant background replication to clear/overwrite Cloud Firestore
+      const auditUser = (req as any).auditUser || {};
+      const userName = auditUser.userName || (req.headers['x-user-name'] ? String(req.headers['x-user-name']) : 'admin');
+
+      try {
+        insertSystemAuditLog({
+          eventType: 'BACKUP_RESTORE_COMPLETED',
+          category: 'sistema',
+          module: 'respaldos',
+          action: `Restauración completa de base de datos desde respaldo JSON (${totalRestoredRows} registros restaurados)`,
+          severity: 'warning',
+          userName: userName,
+          reason: 'Restauración manual de copia de seguridad JSON'
+        });
+      } catch (auditErr) {
+        console.warn("[Backup Restore Audit Warning]:", auditErr);
+      }
+
+      // Enforce background replication to Cloud Firestore
       pushAllLocalToFirestore().then(() => {
-        console.log("[Sync Success] Post-import full sync with Google Cloud Firestore finished.");
+        console.log("[Sync Success] Post-import full sync with Google Cloud Firestore finished successfully.");
       }).catch((err: any) => {
         console.error("[Sync Error] Post-import cloud replication occurred:", err.message);
       });
 
-      res.json({ success: true, message: "Base de datos restaurada localmente e inicio de sincronización con Google Cloud Firestore." });
+      res.json({
+        success: true,
+        message: `✓ Base de datos restaurada exitosamente. Se integraron ${totalRestoredRows} registros sin omitir relaciones ni IDs.`,
+        restoredRecords: totalRestoredRows,
+        restoredRecordCounts
+      });
     } catch (e: any) {
+      console.error("[Import Backup Error]:", e);
       res.status(500).json({ error: "Error de Servidor al restaurar la copia de seguridad: " + e.message });
     }
   });

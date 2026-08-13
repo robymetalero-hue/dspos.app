@@ -99,6 +99,13 @@ db.exec(`
     subtotal_minor REAL
   );
 
+  CREATE TABLE IF NOT EXISTS processed_operations (
+    id TEXT PRIMARY KEY,
+    type TEXT,
+    result TEXT,
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))
+  );
+
   CREATE TABLE IF NOT EXISTS shifts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     closed_by INTEGER,

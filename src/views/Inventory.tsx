@@ -1,5 +1,6 @@
 import { filterAndRankProducts } from "../lib/searchUtils";
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
+import { normalizeProductName } from '../utils/productUtils';
 import { useAppContext } from '../context/AppContext';
 import { hasPermission } from '../utils/permissions';
 import { safeDispatchEvent } from '../utils/events';
@@ -1107,6 +1108,43 @@ export default function Inventory() {
         };
     }, [isSkuScannerOpen, selectedSkuCameraId]);
 
+    // Duplicate Protection & Idempotency States
+    const [isSubmittingProduct, setIsSubmittingProduct] = useState(false);
+    const [clientOpId, setClientOpId] = useState<string>('');
+    const [duplicateModalData, setDuplicateModalData] = useState<{ warning: string; existingProduct: any; payload: any } | null>(null);
+
+    // Read-Only Duplicate Diagnostic States
+    const [isDiagnoseModalOpen, setIsDiagnoseModalOpen] = useState(false);
+    const [diagnoseLoading, setDiagnoseLoading] = useState(false);
+    const [diagnoseData, setDiagnoseData] = useState<any | null>(null);
+
+    // Real-time similar products calculation
+    const similarProducts = useMemo(() => {
+        if (!isFormOpen || editingProduct || !name.trim()) return [];
+        const normTyped = normalizeProductName(name);
+        if (normTyped.length < 2) return [];
+        return products.filter(p => normalizeProductName(p.name) === normTyped || normalizeProductName(p.name).includes(normTyped)).slice(0, 4);
+    }, [isFormOpen, editingProduct, name, products]);
+
+    const runDuplicatesDiagnose = async () => {
+        setIsDiagnoseModalOpen(true);
+        setDiagnoseLoading(true);
+        try {
+            const res = await fetch('/api/products/diagnose-duplicates');
+            const data = await res.json();
+            if (res.ok) {
+                setDiagnoseData(data);
+            } else {
+                showNotification("Error al ejecutar diagnóstico: " + (data.error || ''), "error");
+            }
+        } catch (err: any) {
+            console.error(err);
+            showNotification("Error de conexión al obtener diagnóstico.", "error");
+        } finally {
+            setDiagnoseLoading(false);
+        }
+    };
+
     const openCreateForm = () => {
         setEditingProduct(null);
         setName("");
@@ -1118,6 +1156,10 @@ export default function Inventory() {
         setPriceCost(0.5);
         setStockAlarm(5);
         setImage(null);
+        const newOpId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'prod-op-' + Date.now() + '-' + Math.random().toString(36).substring(2);
+        setClientOpId(newOpId);
+        setIsSubmittingProduct(false);
+        setDuplicateModalData(null);
         setIsFormOpen(true);
     };
 
@@ -1135,23 +1177,31 @@ export default function Inventory() {
         setIsFormOpen(true);
     };
 
-    const handleSave = async (e: React.FormEvent) => {
-        e.preventDefault();
+    const handleSave = async (e: React.FormEvent, forceCreateOverride = false) => {
+        if (e && e.preventDefault) e.preventDefault();
+        if (isSubmittingProduct) return;
+        
         if (!name.trim() || !sku.trim() || !category.trim()) {
             showNotification("Por favor completa los campos requeridos: Nombre, Categoría y SKU.", "error");
             return;
         }
 
+        setIsSubmittingProduct(true);
+
+        const activeOpId = clientOpId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'prod-op-' + Date.now() + '-' + Math.random().toString(36).substring(2));
+
         const payload = {
-            name,
-            category,
-            sku,
+            name: name.trim(),
+            category: category.trim(),
+            sku: sku.trim(),
             stock: Number(stock),
             price_unit: Number(priceUnit),
             price_bulk: Number(priceBulk),
             price_cost: Number(priceCost),
             stock_alarm: Number(stockAlarm),
-            image
+            image,
+            clientOperationId: activeOpId,
+            forceCreate: forceCreateOverride
         };
 
         try {
@@ -1170,28 +1220,42 @@ export default function Inventory() {
                 });
             }
 
+            const data = await res.json();
+
             if (res.ok) {
-                showNotification(`✓ Producto "${name}" guardado exitosamente en stock.`, "success");
+                showNotification(`✓ Producto "${name.trim()}" guardado exitosamente en stock.`, "success");
                 
                 // Dispatch global inventory operation event
                 safeDispatchEvent('inventory_operation', {
                     detail: {
                         type: editingProduct ? 'adjustment' : 'creation',
-                        id: editingProduct ? editingProduct.id : null,
+                        id: editingProduct ? editingProduct.id : data.id,
                         user: user?.username || 'admin',
                         timestamp: new Date().toISOString()
                     }
                 });
 
                 setIsFormOpen(false);
+                setDuplicateModalData(null);
                 fetchProducts();
             } else {
-                const err = await res.json();
-                showNotification(`Error: ${err.error}`, "error");
+                if (data.duplicateWarning && data.existingProduct) {
+                    setDuplicateModalData({
+                        warning: data.error,
+                        existingProduct: data.existingProduct,
+                        payload
+                    });
+                } else if (data.existingProduct) {
+                    showNotification(`⚠️ SKU Duplicado: ${data.error}`, "error");
+                } else {
+                    showNotification(`Error: ${data.error || 'Ocurrió un problema al guardar'}`, "error");
+                }
             }
         } catch (e: any) {
             console.error(e);
             showNotification("Error de conexión al guardar producto.", "error");
+        } finally {
+            setIsSubmittingProduct(false);
         }
     };
 
@@ -1299,20 +1363,30 @@ export default function Inventory() {
                                 >
                                     + Registrar Artículo
                                 </button>
-                                {user?.role === 'admin' && (
-                                    <button 
-                                        onClick={() => {
-                                            setImportSuccessResult(null);
-                                            setImportedProducts([]);
-                                            setImportError(null);
-                                            setIsImportModalOpen(true);
-                                        }}
-                                        className="py-2.5 px-4.5 bg-sky-600 hover:bg-sky-500 hover:scale-[1.01] active:scale-95 text-white font-extrabold text-xs rounded-2xl shadow-md shadow-sky-600/10 border border-[#2c3e50]/20 transition-all cursor-pointer flex items-center gap-1.5"
-                                        title="Importar productos masivamente desde un archivo CSV"
-                                    >
-                                        <FileSpreadsheet size={14} />
-                                        <span>Importar CSV</span>
-                                    </button>
+                                 {user?.role === 'admin' && (
+                                    <>
+                                        <button 
+                                            onClick={() => {
+                                                setImportSuccessResult(null);
+                                                setImportedProducts([]);
+                                                setImportError(null);
+                                                setIsImportModalOpen(true);
+                                            }}
+                                            className="py-2.5 px-4.5 bg-sky-600 hover:bg-sky-500 hover:scale-[1.01] active:scale-95 text-white font-extrabold text-xs rounded-2xl shadow-md shadow-sky-600/10 border border-[#2c3e50]/20 transition-all cursor-pointer flex items-center gap-1.5"
+                                            title="Importar productos masivamente desde un archivo CSV"
+                                        >
+                                            <FileSpreadsheet size={14} />
+                                            <span>Importar CSV</span>
+                                        </button>
+                                        <button 
+                                            onClick={runDuplicatesDiagnose}
+                                            className="py-2.5 px-4.5 bg-purple-600 hover:bg-purple-500 hover:scale-[1.01] active:scale-95 text-white font-extrabold text-xs rounded-2xl shadow-md shadow-purple-600/10 border border-purple-500 transition-all cursor-pointer flex items-center gap-1.5"
+                                            title="Ver diagnóstico de productos duplicados o repetidos (Solo lectura)"
+                                        >
+                                            <ShieldAlert size={14} />
+                                            <span>Diagnóstico Duplicados</span>
+                                        </button>
+                                    </>
                                 )}
                             </>
                         ) : (
@@ -1689,6 +1763,34 @@ export default function Inventory() {
                                         onChange={e => setName(e.target.value)}
                                         required
                                     />
+                                    {similarProducts.length > 0 && (
+                                        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-2.5 mt-1 flex flex-col gap-1.5">
+                                            <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 font-extrabold text-[10px] uppercase tracking-wider">
+                                                <AlertTriangle size={13} />
+                                                <span>Productos similares detectados en catálogo:</span>
+                                            </div>
+                                            <div className="flex flex-col gap-1 max-h-28 overflow-y-auto">
+                                                {similarProducts.map(sp => (
+                                                    <div key={sp.id} className="flex justify-between items-center bg-white dark:bg-[#141b2d] p-1.5 rounded-lg border border-amber-500/20 text-xs">
+                                                        <div>
+                                                            <span className="font-extrabold text-slate-800 dark:text-white">#{sp.id} {sp.name}</span>
+                                                            <span className="text-[9.5px] text-slate-400 block font-mono">SKU: {sp.sku} | Stock: {sp.stock} u. | ${sp.price_unit}</span>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                                setIsFormOpen(false);
+                                                                openEditForm(sp);
+                                                            }}
+                                                            className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-[9.5px] font-extrabold cursor-pointer transition shrink-0"
+                                                        >
+                                                            Abrir Existente
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="flex flex-col gap-1.5">
@@ -1857,11 +1959,187 @@ export default function Inventory() {
                                 <button type="button" onClick={() => setIsFormOpen(false)} className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition cursor-pointer">
                                     Cancelar
                                 </button>
-                                <button type="submit" className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs rounded-xl shadow-lg shadow-blue-500/10 border border-blue-550 cursor-pointer">
-                                    Guardar Cambios
+                                <button 
+                                    type="submit" 
+                                    disabled={isSubmittingProduct}
+                                    className={`px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs rounded-xl shadow-lg shadow-blue-500/10 border border-blue-550 flex items-center gap-2 cursor-pointer ${isSubmittingProduct ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                >
+                                    {isSubmittingProduct && <Loader2 size={14} className="animate-spin" />}
+                                    <span>{isSubmittingProduct ? 'Guardando producto...' : 'Guardar Cambios'}</span>
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Duplicate Product Warning Modal */}
+            {duplicateModalData && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[70] animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-[#0f1424] rounded-3xl w-full max-w-md p-6 shadow-2xl border border-amber-500/40 flex flex-col gap-4 animate-in zoom-in-95 duration-200">
+                        <div className="flex items-center gap-3 text-amber-500">
+                            <AlertTriangle size={28} className="shrink-0" />
+                            <div>
+                                <h3 className="font-extrabold text-sm text-slate-800 dark:text-white uppercase tracking-wider">Posible Registro Duplicado</h3>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{duplicateModalData.warning}</p>
+                            </div>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-black/30 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-col gap-1.5 text-xs">
+                            <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400">Producto Existente en Sistema</span>
+                            <span className="font-extrabold text-slate-800 dark:text-white">
+                                #{duplicateModalData.existingProduct.id} - {duplicateModalData.existingProduct.name}
+                            </span>
+                            <div className="flex gap-4 text-[11px] font-mono font-bold text-slate-500 dark:text-slate-400 mt-1">
+                                <span>SKU: {duplicateModalData.existingProduct.sku}</span>
+                                <span>Stock: {duplicateModalData.existingProduct.stock} u.</span>
+                                <span>Precio: ${duplicateModalData.existingProduct.price_unit}</span>
+                            </div>
+                        </div>
+
+                        <p className="text-xs text-slate-600 dark:text-slate-300 font-medium leading-relaxed">
+                            Para evitar duplicar tarjetas en el Punto de Venta, recomendamos usar el producto existente. ¿Qué deseas hacer?
+                        </p>
+
+                        <div className="flex justify-end gap-2.5 pt-2">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const existing = products.find(p => p.id === duplicateModalData.existingProduct.id);
+                                    setDuplicateModalData(null);
+                                    setIsFormOpen(false);
+                                    if (existing) openEditForm(existing);
+                                }}
+                                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-extrabold transition cursor-pointer shadow-md"
+                            >
+                                Abrir Producto Existente
+                            </button>
+                            <button
+                                type="button"
+                                onClick={(e) => {
+                                    setDuplicateModalData(null);
+                                    handleSave(e as any, true);
+                                }}
+                                disabled={isSubmittingProduct}
+                                className="px-4 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-extrabold transition cursor-pointer"
+                            >
+                                Crear De Todas Formas
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Read-Only Duplicates Diagnostic Modal */}
+            {isDiagnoseModalOpen && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-[70] animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-[#0f1424] rounded-3xl w-full max-w-3xl max-h-[85vh] p-6 shadow-2xl border border-purple-500/30 flex flex-col gap-4 animate-in zoom-in-95 duration-200 overflow-hidden">
+                        <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-850 pb-3">
+                            <div className="flex items-center gap-2">
+                                <ShieldAlert className="text-purple-500" size={20} />
+                                <div>
+                                    <h2 className="font-extrabold text-sm uppercase tracking-wider text-slate-800 dark:text-white">
+                                        Diagnóstico de Duplicados en Catálogo (Solo Lectura)
+                                    </h2>
+                                    <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                        Análisis detallado de productos con nombres o SKUs idénticos. Ningún dato se modifica ni borra.
+                                    </p>
+                                </div>
+                            </div>
+                            <button onClick={() => setIsDiagnoseModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-4">
+                            {diagnoseLoading ? (
+                                <div className="py-16 flex flex-col items-center justify-center gap-3 text-slate-400">
+                                    <Loader2 size={28} className="animate-spin text-purple-500" />
+                                    <span className="text-xs font-bold uppercase tracking-wider">Escaneando base de datos de productos...</span>
+                                </div>
+                            ) : diagnoseData ? (
+                                <>
+                                    <div className="grid grid-cols-3 gap-3">
+                                        <div className="bg-slate-50 dark:bg-black/30 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 text-center">
+                                            <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block">Total en Catálogo</span>
+                                            <span className="text-lg font-black text-slate-800 dark:text-white">{diagnoseData.totalProductsCatalog} u.</span>
+                                        </div>
+                                        <div className="bg-purple-500/10 p-3 rounded-2xl border border-purple-500/20 text-center">
+                                            <span className="text-[9px] font-extrabold uppercase tracking-wider text-purple-600 dark:text-purple-400 block">Grupos Detectados</span>
+                                            <span className="text-lg font-black text-purple-600 dark:text-purple-300">{diagnoseData.totalDuplicateGroups}</span>
+                                        </div>
+                                        <div className="bg-amber-500/10 p-3 rounded-2xl border border-amber-500/20 text-center">
+                                            <span className="text-[9px] font-extrabold uppercase tracking-wider text-amber-600 dark:text-amber-400 block">Productos Involucrados</span>
+                                            <span className="text-lg font-black text-amber-600 dark:text-amber-300">{diagnoseData.totalImpactedProducts}</span>
+                                        </div>
+                                    </div>
+
+                                    {diagnoseData.duplicateGroups.length === 0 ? (
+                                        <div className="p-10 text-center border border-dashed border-emerald-500/30 rounded-2xl bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 font-extrabold text-xs">
+                                            ✓ ¡Excelente! No se encontraron productos duplications o con SKUs repetidos en tu base de datos.
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col gap-3">
+                                            {diagnoseData.duplicateGroups.map((group: any, idx: number) => (
+                                                <div key={group.id || idx} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-black/20 flex flex-col gap-3">
+                                                    <div className="flex justify-between items-center border-b border-slate-200/60 dark:border-slate-800/60 pb-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="px-2 py-0.5 bg-purple-600 text-white rounded text-[9px] font-extrabold uppercase">
+                                                                {group.type}
+                                                            </span>
+                                                            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                                                                Clave: <code className="font-mono bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[11px]">{group.normalizedKey}</code>
+                                                            </span>
+                                                        </div>
+                                                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${group.riskLevel === 'CRÍTICO' ? 'bg-rose-500/20 text-rose-500' : 'bg-amber-500/20 text-amber-500'}`}>
+                                                            Riesgo {group.riskLevel}
+                                                        </span>
+                                                    </div>
+
+                                                    <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                                                        {group.description}
+                                                    </p>
+
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                        {group.products.map((p: any) => (
+                                                            <div key={p.id} className="p-3 bg-white dark:bg-[#121829] rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-1 text-xs">
+                                                                <div className="flex justify-between items-center">
+                                                                    <span className="font-black text-slate-800 dark:text-white">#{p.id} - {p.name}</span>
+                                                                    <span className="text-[10px] font-mono font-bold text-blue-500">${p.price_unit}</span>
+                                                                </div>
+                                                                <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                                                                    <span>SKU: {p.sku || 'S/N'}</span>
+                                                                    <span>Stock: {p.stock} u.</span>
+                                                                </div>
+                                                                <div className="flex gap-2 text-[9px] font-extrabold text-slate-400 mt-1 pt-1 border-t border-slate-100 dark:border-slate-850">
+                                                                    <span>🛒 Ventas: {p.sales_count}</span>
+                                                                    <span>📦 Movimientos: {p.audit_count}</span>
+                                                                    <span>📥 Lotes: {p.arrivals_count}</span>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    <div className="p-3 bg-slate-100 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 text-[10.5px] text-slate-500 dark:text-slate-400 font-semibold leading-relaxed">
+                                        💡 <strong>Aviso Importante de Protección de Datos:</strong> {diagnoseData.note} Conservar ambos registros garantiza que las ventas antiguas sigan vinculadas a su comprobante original sin alterar la contabilidad.
+                                    </div>
+                                </>
+                            ) : null}
+                        </div>
+
+                        <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-850">
+                            <button
+                                type="button"
+                                onClick={() => setIsDiagnoseModalOpen(false)}
+                                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                            >
+                                Cerrar Diagnóstico
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

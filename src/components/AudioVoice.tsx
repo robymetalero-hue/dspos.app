@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Mic, MicOff, Loader, Sparkles, Send, Volume2, Info, MessageSquare, X, Minus, Bot, VolumeX, Camera, Upload, Trash2, ShoppingBag, ShoppingCart, PlusCircle, Check, FileText, Copy } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { hasPermission } from '../utils/permissions';
+import { normalizeProductName } from '../utils/productUtils';
 import { motion, AnimatePresence } from 'motion/react';
 
 function downsampleBuffer(buffer: Float32Array, fromRate: number, toRate: number): Int16Array {
@@ -409,8 +410,30 @@ export default function AudioVoice() {
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             }]);
         } else if (action === 'createProduct') {
+            const requestedName = (payload.name || "Nuevo Producto IA").trim();
+            const normReqName = normalizeProductName(requestedName);
+            const requestedSku = payload.sku ? String(payload.sku).trim().toLowerCase() : '';
+            
+            const existingMatch = products.find(p => 
+                (requestedSku && p.sku && p.sku.toLowerCase() === requestedSku) || 
+                normalizeProductName(p.name) === normReqName
+            );
+
+            if (existingMatch) {
+                const msgVal = `El producto "${existingMatch.name}" ya existe en catálogo (#${existingMatch.id}, SKU: ${existingMatch.sku}). Se agregó directamente al carrito de compras.`;
+                setTranscript(msgVal);
+                setMessages(prev => [...prev, {
+                    id: genUniqueId('sys_exist_prod'),
+                    sender: 'system',
+                    text: `ℹ️ ${msgVal}`,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                }]);
+                addToCart(existingMatch, payload.quantity || 1);
+                return;
+            }
+
             const newProduct = {
-                name: payload.name || "Nuevo Producto IA",
+                name: requestedName,
                 category: payload.category || "General",
                 sku: payload.sku || "IA-GET-" + Math.floor(100 + Math.random() * 900),
                 stock: payload.stock !== undefined ? Number(payload.stock) : 15,
@@ -426,9 +449,10 @@ export default function AudioVoice() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(newProduct)
             })
-            .then(res => {
-                if (!res.ok) throw new Error("Error en el servidor al registrar.");
-                return res.json();
+            .then(async res => {
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || "Error en el servidor al registrar.");
+                return data;
             })
             .then(data => {
                 const msgVal = `Producto creado exitosamente: ${newProduct.name} (SKU: ${newProduct.sku}) con precio de Bs.${(newProduct.price_unit * 6.96).toFixed(2)}.`;
@@ -455,7 +479,7 @@ export default function AudioVoice() {
                 setMessages(prev => [...prev, {
                     id: genUniqueId('sys_err_prod'),
                     sender: 'system',
-                    text: `⚠️ Falló registro automático de "${newProduct.name}": SKU duplicado o error técnico.`,
+                    text: `⚠️ Falló registro automático de "${newProduct.name}": ${err.message || 'Producto duplicado o error técnico'}.`,
                     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 }]);
             });

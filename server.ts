@@ -1903,24 +1903,22 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       });
     }
 
-    // 3. Check Normalized Name Duplicate Warning (unless forceCreate is true)
-    if (!forceCreate) {
-      const normInput = normalizeProductName(trimmedName);
-      const allProds = db.prepare('SELECT id, name, sku, stock, price_unit FROM products').all() as any[];
-      const existingNameMatch = allProds.find(p => normalizeProductName(p.name) === normInput);
-      if (existingNameMatch) {
-        return res.status(400).json({
-          duplicateWarning: true,
-          error: `Encontramos un producto potencialmente duplicado con el nombre "${existingNameMatch.name}" (#${existingNameMatch.id}, SKU: ${existingNameMatch.sku}).`,
-          existingProduct: {
-            id: existingNameMatch.id,
-            name: existingNameMatch.name,
-            sku: existingNameMatch.sku,
-            stock: existingNameMatch.stock,
-            price_unit: existingNameMatch.price_unit
-          }
-        });
-      }
+    // 3. Check Normalized Name Duplicate (Strict Prevention - Avoid Duplicate Names with Different SKUs)
+    const normInput = normalizeProductName(trimmedName);
+    const allProds = db.prepare('SELECT id, name, sku, stock, price_unit FROM products').all() as any[];
+    const existingNameMatch = allProds.find(p => normalizeProductName(p.name) === normInput);
+    if (existingNameMatch) {
+      return res.status(400).json({
+        duplicateWarning: true,
+        error: `Ya existe un producto registrado con el nombre "${existingNameMatch.name}" (#${existingNameMatch.id}, SKU: ${existingNameMatch.sku}). No se permiten productos duplicados con el mismo nombre.`,
+        existingProduct: {
+          id: existingNameMatch.id,
+          name: existingNameMatch.name,
+          sku: existingNameMatch.sku,
+          stock: existingNameMatch.stock,
+          price_unit: existingNameMatch.price_unit
+        }
+      });
     }
 
     const safeStock = Math.max(0, Number(stock || 0));
@@ -2022,7 +2020,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
 
     try {
-      const selectStmt = db.prepare('SELECT id, name, sku, stock, price_cost, price_unit FROM products WHERE sku = ?');
+      const selectBySkuStmt = db.prepare('SELECT id, name, sku, stock, price_cost, price_unit FROM products WHERE LOWER(TRIM(sku)) = LOWER(?)');
       const insertStmt = db.prepare(`
         INSERT INTO products (name, category, sku, stock, price_unit, price_bulk, price_cost, stock_alarm, image)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
@@ -2032,6 +2030,13 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         UPDATE products SET name = ?, category = ?, stock = ?, price_unit = ?, price_bulk = ?, price_cost = ?, stock_alarm = ?
         WHERE id = ?
       `);
+
+      // Preload existing products for accurate name normalization matching
+      const allExistingProducts = db.prepare('SELECT id, name, sku, stock, price_cost, price_unit FROM products').all() as any[];
+      const normNameMap = new Map<string, any>();
+      for (const prod of allExistingProducts) {
+        normNameMap.set(normalizeProductName(prod.name), prod);
+      }
 
       let inserted = 0;
       let updated = 0;
@@ -2052,7 +2057,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           const name = String(p.name || '').trim();
           const category = String(p.category || 'Varios').trim();
           
-          if (!sku || !name) {
+          if (!name) {
             skipped++;
             continue;
           }
@@ -2063,8 +2068,16 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           const price_cost = Math.max(0, Number(p.price_cost !== undefined ? p.price_cost : (price_unit ? price_unit * 0.6 : 0)));
           const stock_alarm = Math.max(0, Number(p.stock_alarm || 0));
 
-          // Check if SKU exists
-          const existing = selectStmt.get(sku) as any;
+          // 1. Check if product already exists by exact SKU OR by normalized Name
+          let existing: any = null;
+          if (sku) {
+            existing = selectBySkuStmt.get(sku.toLowerCase()) as any;
+          }
+          const normName = normalizeProductName(name);
+          if (!existing && normNameMap.has(normName)) {
+            existing = normNameMap.get(normName);
+          }
+
           if (existing) {
             if (behavior === 'skip') {
               skipped++;
@@ -2072,6 +2085,11 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
               overwriteStmt.run(name, category, stock, price_unit, price_bulk, price_cost, stock_alarm, existing.id);
               updated++;
               productIdsToSync.push(existing.id);
+
+              // Update in-memory map in case next rows reference the same name
+              existing.name = name;
+              existing.stock = stock;
+              normNameMap.set(normName, existing);
 
               const diff = stock - existing.stock;
               if (diff !== 0) {
@@ -2081,7 +2099,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
                   INSERT INTO inventory_audit_logs 
                   (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Importación Masiva', 'Ajuste de stock por sobreescritura de importación masiva', ?)
-                `).run(existing.id, name, sku, logType, absQty, price_cost, normUserId, normUsername, getBoliviaISOString());
+                `).run(existing.id, name, existing.sku || sku, logType, absQty, price_cost, normUserId, normUsername, getBoliviaISOString());
                 inventoryAuditLogIds.push(invRes.lastInsertRowid);
 
                 // System Audit
@@ -2118,12 +2136,16 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
               updated++;
               productIdsToSync.push(existing.id);
 
+              const oldStock = existing.stock;
+              existing.stock = oldStock + stock;
+              normNameMap.set(normName, existing);
+
               if (stock > 0) {
                 const invRes = db.prepare(`
                   INSERT INTO inventory_audit_logs 
                   (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
                   VALUES (?, ?, ?, 'ajuste_incremento', ?, ?, ?, ?, 'Importación Masiva', 'Incremento de stock por importación masiva', ?)
-                `).run(existing.id, existing.name, sku, stock, price_cost, normUserId, normUsername, getBoliviaISOString());
+                `).run(existing.id, existing.name, existing.sku || sku, stock, price_cost, normUserId, normUsername, getBoliviaISOString());
                 inventoryAuditLogIds.push(invRes.lastInsertRowid);
 
                 // System Audit
@@ -2140,9 +2162,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
                     userId: normUserId,
                     userName: normUsername,
                     userRole: normUserRole,
-                    quantityBefore: existing.stock,
+                    quantityBefore: oldStock,
                     quantityChanged: stock,
-                    quantityAfter: existing.stock + stock,
+                    quantityAfter: oldStock + stock,
                     priceBefore: existing.price_unit,
                     priceAfter: existing.price_unit,
                     reason: 'Incremento de stock por importación masiva',
@@ -2156,17 +2178,22 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
               }
             }
           } else {
-            const result = insertStmt.run(name, category, sku, stock, price_unit, price_bulk, price_cost, stock_alarm);
+            const finalSku = sku || ("AUTO-" + Math.floor(100000 + Math.random() * 900000));
+            const result = insertStmt.run(name, category, finalSku, stock, price_unit, price_bulk, price_cost, stock_alarm);
             inserted++;
             const newProdId = result.lastInsertRowid;
             productIdsToSync.push(newProdId);
+
+            // Register in in-memory map to prevent duplicates within the same batch
+            const newEntry = { id: newProdId, name, sku: finalSku, stock, price_cost, price_unit };
+            normNameMap.set(normName, newEntry);
 
             if (stock > 0) {
               const invRes = db.prepare(`
                 INSERT INTO inventory_audit_logs 
                 (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
                 VALUES (?, ?, ?, 'ingreso_compra', ?, ?, ?, ?, 'Stock Inicial', 'Registro inicial por importación masiva', ?)
-              `).run(newProdId, name, sku, stock, price_cost, normUserId, normUsername, getBoliviaISOString());
+              `).run(newProdId, name, finalSku, stock, price_cost, normUserId, normUsername, getBoliviaISOString());
               inventoryAuditLogIds.push(invRes.lastInsertRowid);
             }
 
@@ -2237,6 +2264,27 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       const oldProd = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
       if (!oldProd) {
         return res.status(404).json({ error: "Producto no encontrado." });
+      }
+
+      const trimmedName = name.trim();
+      const trimmedSku = sku.trim();
+
+      // Check if SKU is already used by ANOTHER product
+      if (oldProd.sku.toLowerCase() !== trimmedSku.toLowerCase()) {
+        const skuCollision = db.prepare('SELECT id, name, sku FROM products WHERE LOWER(TRIM(sku)) = LOWER(?) AND id != ?').get(trimmedSku.toLowerCase(), id) as any;
+        if (skuCollision) {
+          return res.status(400).json({ error: `Ya existe otro producto (#${skuCollision.id} - ${skuCollision.name}) con el SKU "${trimmedSku}".` });
+        }
+      }
+
+      // Check if Name is already used by ANOTHER product
+      if (oldProd.name.trim() !== trimmedName) {
+        const normInput = normalizeProductName(trimmedName);
+        const otherProds = db.prepare('SELECT id, name, sku FROM products WHERE id != ?').all(id) as any[];
+        const nameCollision = otherProds.find(p => normalizeProductName(p.name) === normInput);
+        if (nameCollision) {
+          return res.status(400).json({ error: `Ya existe otro producto registrado con el nombre "${nameCollision.name}" (#${nameCollision.id}, SKU: ${nameCollision.sku}). No se permiten productos con nombres duplicados.` });
+        }
       }
 
       // Granular Security check based on changed fields:
@@ -6982,30 +7030,61 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
                 } else if (fc.name === "addNewProductToInventory") {
                   const { name, category, sku, priceUnit, stock, stockAlarm } = fc.args as any;
                   try {
-                    const alarm = stockAlarm !== undefined ? stockAlarm : 5;
-                    db.prepare('INSERT INTO products (name, category, sku, stock, price_unit, price_bulk, stock_alarm) VALUES (?, ?, ?, ?, ?, ?, ?)')
-                      .run(name, category, sku, stock, priceUnit, priceUnit * 0.8, alarm);
-                    syncAfterWrite("products");
+                    const trimmedName = String(name || '').trim();
+                    const trimmedSku = String(sku || '').trim();
+                    const normName = normalizeProductName(trimmedName);
+                    const allProds = db.prepare('SELECT id, name, sku, stock, price_unit FROM products').all() as any[];
                     
-                    safeSend(JSON.stringify({
-                      type: 'action',
-                      action: 'refreshProducts',
-                      payload: {}
-                    }));
+                    let existing = allProds.find(p => p.sku && p.sku.toLowerCase() === trimmedSku.toLowerCase());
+                    if (!existing) {
+                      existing = allProds.find(p => normalizeProductName(p.name) === normName);
+                    }
 
-                    activeSession.sendToolResponse({
-                      functionResponses: [{
-                        id: fc.id,
-                        name: fc.name,
-                        response: { result: `El nuevo producto "${name}" con SKU "${sku}" a un precio de $${priceUnit} y stock inicial de ${stock} ha sido insertado con éxito en la base de datos.` }
-                      }]
-                    });
+                    if (existing) {
+                      // Update existing product stock instead of creating a duplicate
+                      db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(Number(stock || 0), existing.id);
+                      syncAfterWrite("products");
+                      
+                      safeSend(JSON.stringify({
+                        type: 'action',
+                        action: 'refreshProducts',
+                        payload: {}
+                      }));
+
+                      activeSession.sendToolResponse({
+                        functionResponses: [{
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: `El producto "${existing.name}" ya existía en el inventario (#${existing.id}, SKU: ${existing.sku}). Se han sumado ${stock} unidades a sus existencias (Stock total actual: ${existing.stock + Number(stock || 0)}).` }
+                        }]
+                      });
+                    } else {
+                      const alarm = stockAlarm !== undefined ? stockAlarm : 5;
+                      const finalSku = trimmedSku || ("AUTO-" + Math.floor(100000 + Math.random() * 900000));
+                      db.prepare('INSERT INTO products (name, category, sku, stock, price_unit, price_bulk, stock_alarm) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                        .run(trimmedName, category || 'Varios', finalSku, stock, priceUnit, priceUnit * 0.8, alarm);
+                      syncAfterWrite("products");
+                      
+                      safeSend(JSON.stringify({
+                        type: 'action',
+                        action: 'refreshProducts',
+                        payload: {}
+                      }));
+
+                      activeSession.sendToolResponse({
+                        functionResponses: [{
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: `El nuevo producto "${trimmedName}" con SKU "${finalSku}" a un precio de $${priceUnit} y stock inicial de ${stock} ha sido insertado con éxito en la base de datos.` }
+                        }]
+                      });
+                    }
                   } catch (dbErr: any) {
                     activeSession.sendToolResponse({
                       functionResponses: [{
                         id: fc.id,
                         name: fc.name,
-                        response: { result: `Error al insertar nuevo producto: ${dbErr.message}` }
+                        response: { result: `Error al procesar producto en inventario: ${dbErr.message}` }
                       }]
                     });
                   }

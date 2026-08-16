@@ -1998,10 +1998,17 @@ export default function Inventory() {
                         </div>
 
                         <p className="text-xs text-slate-600 dark:text-slate-300 font-medium leading-relaxed">
-                            Para evitar duplicar tarjetas en el Punto de Venta, recomendamos usar el producto existente. ¿Qué deseas hacer?
+                            Para evitar duplicar registros y mantener el inventario 100% preciso, no se permite crear dos productos con el mismo nombre. Puedes abrir el producto existente para editarlo o cambiar el nombre del nuevo artículo.
                         </p>
 
                         <div className="flex justify-end gap-2.5 pt-2">
+                            <button
+                                type="button"
+                                onClick={() => setDuplicateModalData(null)}
+                                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+                            >
+                                Modificar Datos
+                            </button>
                             <button
                                 type="button"
                                 onClick={() => {
@@ -2013,17 +2020,6 @@ export default function Inventory() {
                                 className="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-extrabold transition cursor-pointer shadow-md"
                             >
                                 Abrir Producto Existente
-                            </button>
-                            <button
-                                type="button"
-                                onClick={(e) => {
-                                    setDuplicateModalData(null);
-                                    handleSave(e as any, true);
-                                }}
-                                disabled={isSubmittingProduct}
-                                className="px-4 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-extrabold transition cursor-pointer"
-                            >
-                                Crear De Todas Formas
                             </button>
                         </div>
                     </div>
@@ -2803,13 +2799,13 @@ export default function Inventory() {
                             {/* Behavior Controls & File Input */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                                 <div className="flex flex-col gap-1.5">
-                                    <span className="font-bold text-slate-500">¿Cómo manejar SKU duplicados?</span>
+                                    <span className="font-bold text-slate-500">¿Cómo procesar artículos existentes (mismo SKU o Nombre)?</span>
                                     <select 
                                         value={importBehavior}
                                         onChange={(e: any) => setImportBehavior(e.target.value)}
                                         className="py-2 px-3 bg-slate-50 dark:bg-[#111625] border border-slate-200 dark:border-slate-850 rounded-xl text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-sky-500"
                                     >
-                                        <option value="update_stock">Sumar existencias (Recomendado)</option>
+                                        <option value="update_stock">Sumar existencias al producto existente (Recomendado)</option>
                                         <option value="overwrite">Sobrescribir datos del artículo existente</option>
                                         <option value="skip">Omitir e ignorar duplicados</option>
                                     </select>

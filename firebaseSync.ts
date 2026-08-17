@@ -195,6 +195,64 @@ export const APPEND_ONLY_TABLES = [
 export const lastSyncedMaxIdCache: Record<string, number> = {};
 
 /**
+ * Records a deletion in the local deleted_records tombstone table.
+ */
+export function recordDeletion(tableName: string, recordId: string | number) {
+  try {
+    const idStr = String(recordId);
+    db.prepare("INSERT OR REPLACE INTO deleted_records (table_name, record_id, deleted_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))").run(tableName, idStr);
+  } catch (e: any) {
+    console.warn(`[DeletedRecords] Warning recording deletion for ${tableName} #${recordId}:`, e.message);
+  }
+}
+
+/**
+ * Checks if a record was marked as deleted.
+ */
+export function isRecordDeleted(tableName: string, recordId: string | number): boolean {
+  try {
+    const row = db.prepare('SELECT 1 FROM deleted_records WHERE table_name = ? AND record_id = ?').get(tableName, String(recordId));
+    return !!row;
+  } catch (e: any) {
+    return false;
+  }
+}
+
+/**
+ * Deletes document(s) directly and immediately from Firestore.
+ */
+export async function deleteFromFirestore(tableName: string, idOrIds: any | any[]) {
+  if (!firestore || checkQuota()) {
+    return;
+  }
+  await ensureServerAuth();
+
+  const ids = Array.isArray(idOrIds) ? idOrIds.map(String) : [String(idOrIds)];
+  if (ids.length === 0) return;
+
+  try {
+    let batch = writeBatch(firestore);
+    let count = 0;
+    for (const id of ids) {
+      const docRef = doc(firestore, tableName, String(id));
+      batch.delete(docRef);
+      count++;
+      if (count >= 400) {
+        await batch.commit();
+        batch = writeBatch(firestore);
+        count = 0;
+      }
+    }
+    if (count > 0) {
+      await batch.commit();
+    }
+    console.log(`[Sync Delete] Successfully deleted ${ids.length} document(s) from Firestore collection "${tableName}".`);
+  } catch (err: any) {
+    handleSyncError(err, `[Sync Delete Error] Could not delete from Firestore "${tableName}":`);
+  }
+}
+
+/**
  * Pushes a local SQLite table's content to Firestore.
  * Supports targeted synchronization for specific rows to optimize speed and network payload.
  */
@@ -209,14 +267,27 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
     let rows: any[] = [];
     const idList = idOrIds ? (Array.isArray(idOrIds) ? idOrIds.map(String) : [String(idOrIds)]) : null;
 
+    // Filter out locally deleted records
+    let deletedIdsSet = new Set<string>();
+    try {
+      const deletedRows = db.prepare("SELECT record_id FROM deleted_records WHERE table_name = ?").all(tableName) as any[];
+      deletedIdsSet = new Set(deletedRows.map(r => String(r.record_id)));
+    } catch (e) {}
+
     if (idList && idList.length > 0) {
       // Sync only specific rows to make it super fast
       if (isSettings) {
         const placeholders = idList.map(() => '?').join(', ');
         rows = db.prepare(`SELECT * FROM settings WHERE key IN (${placeholders})`).all(...idList) as any[];
       } else {
-        const placeholders = idList.map(() => '?').join(', ');
-        rows = db.prepare(`SELECT * FROM ${tableName} WHERE id IN (${placeholders})`).all(...idList) as any[];
+        const validIds = idList.filter(id => !deletedIdsSet.has(String(id)));
+        if (validIds.length === 0) {
+          // If all targeted IDs are deleted, delete them from Firestore
+          await deleteFromFirestore(tableName, idList);
+          return;
+        }
+        const placeholders = validIds.map(() => '?').join(', ');
+        rows = db.prepare(`SELECT * FROM ${tableName} WHERE id IN (${placeholders})`).all(...validIds) as any[];
       }
     } else {
       // Full table sync requested.
@@ -274,6 +345,7 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
 
           for (const row of rows) {
             const docId = String(row.id);
+            if (deletedIdsSet.has(docId)) continue;
             const docRef = doc(firestore, tableName, docId);
 
             const cleanData: any = {};
@@ -303,6 +375,9 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
       }
 
       rows = db.prepare(`SELECT * FROM ${tableName}`).all() as any[];
+      if (deletedIdsSet.size > 0 && !isSettings) {
+        rows = rows.filter(r => !deletedIdsSet.has(String(r.id)));
+      }
     }
 
     const colRef = collection(firestore, tableName);
@@ -512,6 +587,51 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
           allowedColumns = new Set();
         }
 
+        // 1. Fetch locally deleted record IDs for this table
+        let deletedIdsSet = new Set<string>();
+        try {
+          const deletedRows = db.prepare("SELECT record_id FROM deleted_records WHERE table_name = ?").all(table) as any[];
+          deletedIdsSet = new Set(deletedRows.map(r => String(r.record_id)));
+        } catch (e) {}
+
+        const remoteDocs = snapshot.docs;
+        const remoteIds = new Set<string>();
+        const ghostDocsToDeleteFromCloud: any[] = [];
+
+        for (const docSnap of remoteDocs) {
+          const data = docSnap.data();
+          const docId = String(table === 'settings' ? (data.key || docSnap.id) : (data.id !== undefined ? data.id : docSnap.id));
+          remoteIds.add(docId);
+
+          if (deletedIdsSet.has(docId)) {
+            // This record was deleted locally! Queue for permanent removal from Firestore
+            ghostDocsToDeleteFromCloud.push(docSnap.ref);
+          }
+        }
+
+        // Clean up any lingering deleted documents from Firestore in background
+        if (ghostDocsToDeleteFromCloud.length > 0) {
+          (async () => {
+            try {
+              let delBatch = writeBatch(firestore);
+              let delOp = 0;
+              for (const ref of ghostDocsToDeleteFromCloud) {
+                delBatch.delete(ref);
+                delOp++;
+                if (delOp >= 400) {
+                  await delBatch.commit();
+                  delBatch = writeBatch(firestore);
+                  delOp = 0;
+                }
+              }
+              if (delOp > 0) {
+                await delBatch.commit();
+              }
+              console.log(`[Sync Cleanup] Purged ${ghostDocsToDeleteFromCloud.length} tombstoned record(s) from cloud collection "${table}".`);
+            } catch (delErr) {}
+          })().catch(() => {});
+        }
+
         if (table === 'departments') {
           try {
             const cleanedRow = db.prepare("SELECT value FROM settings WHERE key = 'migration_clean_ghost_departments_fs'").get() as any;
@@ -544,6 +664,12 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
           
           for (const docSnap of snapshot.docs) {
             const data = docSnap.data();
+            const docId = String(table === 'settings' ? (data.key || docSnap.id) : (data.id !== undefined ? data.id : docSnap.id));
+
+            // CRITICAL: Never re-insert records that have been deleted!
+            if (deletedIdsSet.has(docId)) {
+              continue;
+            }
             
             if (table === 'departments' && data && data.name && ['Storage', 'Micro SDs', 'USBs', 'Electronics', 'Micro SD'].includes(data.name)) {
               const prodCount = db.prepare("SELECT COUNT(*) as count FROM products WHERE category = ?").get(data.name) as any;
@@ -584,6 +710,29 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
         });
 
         syncTx();
+
+        // 2. Reconcile deletions: If records exist in SQLite that are missing from Firestore
+        // (and weren't created in the last 60 seconds), remove them from SQLite and mark as deleted.
+        if (['products', 'clients', 'departments'].includes(table) && remoteDocs.length > 0 && !forceOverwrite) {
+          try {
+            const localRows = db.prepare(`SELECT id, updated_at FROM ${table}`).all() as any[];
+            for (const localRow of localRows) {
+              const localIdStr = String(localRow.id);
+              if (!remoteIds.has(localIdStr)) {
+                const updatedAtTime = localRow.updated_at ? new Date(localRow.updated_at).getTime() : 0;
+                const isRecentlyCreatedLocally = (Date.now() - updatedAtTime) < 60000;
+
+                if (!isRecentlyCreatedLocally || deletedIdsSet.has(localIdStr)) {
+                  console.log(`[Sync Reconcile] Purging orphan record #${localIdStr} from table "${table}" (deleted in cloud).`);
+                  db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(localRow.id);
+                  recordDeletion(table, localIdStr);
+                }
+              }
+            }
+          } catch (reconcileErr: any) {
+            console.warn(`[Sync Reconcile Warning] Could not reconcile deletions for table "${table}":`, reconcileErr.message);
+          }
+        }
         updatedTableCount++;
       } catch (tableErr: any) {
         handleSyncError(tableErr, `[Sync Warning] Table "${table}":`);

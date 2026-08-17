@@ -222,8 +222,15 @@ db.exec(`
     created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))
   );
 
+  CREATE TABLE IF NOT EXISTS deleted_records (
+    table_name TEXT,
+    record_id TEXT,
+    deleted_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours')),
+    PRIMARY KEY (table_name, record_id)
+  );
 
   -- High-Performance Database Indexes
+  CREATE INDEX IF NOT EXISTS idx_deleted_records_lookup ON deleted_records (table_name, record_id);
   CREATE INDEX IF NOT EXISTS idx_sales_user_id ON sales (user_id);
   CREATE INDEX IF NOT EXISTS idx_sales_client_id ON sales (client_id);
   CREATE INDEX IF NOT EXISTS idx_sales_cierre_id ON sales (cierre_id);

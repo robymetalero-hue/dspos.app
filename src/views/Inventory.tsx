@@ -2107,10 +2107,26 @@ export default function Inventory() {
                                                                     <span>SKU: {p.sku || 'S/N'}</span>
                                                                     <span>Stock: {p.stock} u.</span>
                                                                 </div>
-                                                                <div className="flex gap-2 text-[9px] font-extrabold text-slate-400 mt-1 pt-1 border-t border-slate-100 dark:border-slate-850">
-                                                                    <span>🛒 Ventas: {p.sales_count}</span>
-                                                                    <span>📦 Movimientos: {p.audit_count}</span>
-                                                                    <span>📥 Lotes: {p.arrivals_count}</span>
+                                                                <div className="flex justify-between items-center text-[9px] font-extrabold text-slate-400 mt-1 pt-1 border-t border-slate-100 dark:border-slate-850">
+                                                                    <div className="flex gap-2">
+                                                                        <span>🛒 Ventas: {p.sales_count}</span>
+                                                                        <span>📦 Movimientos: {p.audit_count}</span>
+                                                                        <span>📥 Lotes: {p.arrivals_count}</span>
+                                                                    </div>
+                                                                    {user?.role === 'admin' && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={async () => {
+                                                                                await handleDelete(p.id, p.name);
+                                                                                runDuplicatesDiagnose();
+                                                                            }}
+                                                                            className="text-rose-500 hover:text-rose-700 dark:hover:text-rose-400 font-extrabold flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded hover:bg-rose-50 dark:hover:bg-rose-950/40 transition"
+                                                                            title="Eliminar este duplicado de forma definitiva"
+                                                                        >
+                                                                            <Trash2 size={11} />
+                                                                            <span>Eliminar</span>
+                                                                        </button>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                         ))}

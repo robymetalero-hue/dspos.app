@@ -11,7 +11,7 @@ import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { db, getBoliviaISOString, insertSystemAuditLog } from "./database.ts";
 import { normalizeProductName } from "./src/utils/productUtils.ts";
-import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData } from "./firebaseSync.ts";
+import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData, recordDeletion, deleteFromFirestore } from "./firebaseSync.ts";
 import { collection, getDocs } from "firebase/firestore";
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration } from "@google/genai";
 import { WebSocketServer } from "ws";
@@ -2575,7 +2575,14 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       const prodName = oldProd ? oldProd.name : `Producto #${id}`;
       const stockBefore = oldProd ? oldProd.stock : 0;
 
+      // 1. Delete from SQLite
       db.prepare('DELETE FROM products WHERE id = ?').run(id);
+
+      // 2. Record tombstone deletion to prevent sync resurrection
+      recordDeletion("products", id);
+
+      // 3. Immediately delete from Firestore cloud
+      deleteFromFirestore("products", id).catch(() => {});
 
       const auditUser = (req as any).auditUser || {};
       insertSystemAuditLog({
@@ -2601,6 +2608,62 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
       syncAfterWrite("products");
       res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Bulk / duplicate product deletion endpoint for clean administrative operations
+  app.post("/api/products/delete-batch", enforcePermission('delete_products'), (req, res) => {
+    const { ids, reason } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "Se requiere un array 'ids' con los identificadores de productos a eliminar." });
+    }
+    try {
+      const auditUser = (req as any).auditUser || {};
+      const deletedIds: (string | number)[] = [];
+
+      const tx = db.transaction(() => {
+        for (const rawId of ids) {
+          const id = String(rawId);
+          const oldProd = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as any;
+          if (oldProd) {
+            db.prepare('DELETE FROM products WHERE id = ?').run(id);
+            recordDeletion("products", id);
+            deletedIds.push(id);
+
+            insertSystemAuditLog({
+              eventType: 'eliminacion_producto',
+              category: 'productos',
+              module: 'inventario',
+              action: 'Eliminación masiva / limpieza de duplicados',
+              severity: 'critical',
+              entityType: 'producto',
+              entityId: id,
+              entityName: oldProd.name,
+              userId: auditUser.userId,
+              userName: auditUser.userName || 'admin',
+              userRole: auditUser.userRole,
+              quantityBefore: oldProd.stock || 0,
+              quantityChanged: -(oldProd.stock || 0),
+              quantityAfter: 0,
+              reason: reason || 'Eliminación manual de productos duplicados',
+              beforeData: oldProd,
+              relatedProductId: id,
+              status: 'success'
+            });
+          }
+        }
+      });
+
+      tx();
+
+      if (deletedIds.length > 0) {
+        deleteFromFirestore("products", deletedIds).catch(() => {});
+        syncAfterWrite("products");
+      }
+
+      res.json({ success: true, count: deletedIds.length, deletedIds });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -3009,6 +3072,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     const { id } = req.params;
     try {
       db.prepare('DELETE FROM departments WHERE id = ?').run(id);
+      recordDeletion("departments", id);
+      deleteFromFirestore("departments", id).catch(() => {});
       syncAfterWrite("departments");
       res.json({ success: true });
     } catch (e: any) {

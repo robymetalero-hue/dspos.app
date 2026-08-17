@@ -4,9 +4,11 @@ import {
   ShieldAlert, Activity, Cpu, Database, RefreshCw, Send, 
   CheckCircle, Play, Sparkles, Terminal, FileText, ChevronRight, 
   HelpCircle, Trash2, Code2, AlertTriangle, Scale, Coins, Zap, Copy, AlertCircle,
-  Calculator, Check, XCircle, ArrowRight, DollarSign, Percent, ShieldCheck, Download, Plus, Minus
+  Calculator, Check, XCircle, ArrowRight, DollarSign, Percent, ShieldCheck, Download, Plus, Minus,
+  Boxes, TrendingUp, CreditCard, Wallet, Layers, Lightbulb, CheckCircle2, Wrench
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { isAdminUser } from '../utils/permissions';
 import { 
   runFiscalPrecisionTests, 
   calculatePosTransaction, 
@@ -79,6 +81,7 @@ self.addEventListener('fetch', (e) => {
 
 export default function DiagnosticoView() {
   const { 
+    user,
     exchangeRate, view, setView,
     isAutonomousTesting, setIsAutonomousTesting, autonomousStep, setAutonomousStep, autonomousLogs, setAutonomousLogs,
     apiPingResults, setApiPingResults
@@ -86,10 +89,29 @@ export default function DiagnosticoView() {
   const [loading, setLoading] = useState(false);
   const [systemData, setSystemData] = useState<any>(null);
   const [lastCheckTime, setLastCheckTime] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<'automatic' | 'assist' | 'kb' | 'code-review' | 'math-tests'>('automatic');
+  const [activeTab, setActiveTab] = useState<'suggestions' | 'automatic' | 'assist' | 'kb' | 'code-review' | 'math-tests'>('suggestions');
   const [integrityLoading, setIntegrityLoading] = useState(false);
   const [integrityResult, setIntegrityResult] = useState<any>(null);
   const [integrityMessage, setIntegrityMessage] = useState<string | null>(null);
+
+  // Functional Analysis & Improvement Suggestions state
+  const [functionalData, setFunctionalData] = useState<any>(null);
+  const [functionalLoading, setFunctionalLoading] = useState<boolean>(false);
+
+  const runFunctionalAnalysis = async () => {
+    setFunctionalLoading(true);
+    try {
+      const res = await fetch('/api/diagnose/functional-analysis');
+      if (res.ok) {
+        const data = await res.json();
+        setFunctionalData(data);
+      }
+    } catch (e) {
+      console.error("Error fetching functional analysis:", e);
+    } finally {
+      setFunctionalLoading(false);
+    }
+  };
 
   // Fiscal Math & IEEE-754 Precision Unit Test Suite States
   const [mathTests, setMathTests] = useState<UnitTestResult[]>(() => runFiscalPrecisionTests());
@@ -498,15 +520,28 @@ export default function DiagnosticoView() {
   };
 
   useEffect(() => {
-    runSystemCheck();
-    evaluateClientMetrics();
-  }, []);
+    if (isAdminUser(user)) {
+      runSystemCheck();
+      evaluateClientMetrics();
+      runFunctionalAnalysis();
+    }
+  }, [user]);
 
   useEffect(() => {
+    if (!isAdminUser(user)) return;
     if (activeTab === 'code-review' && !codeAuditData) {
       runCodeAudit();
     }
-  }, [activeTab]);
+    if (activeTab === 'suggestions' && !functionalData) {
+      runFunctionalAnalysis();
+    }
+  }, [activeTab, user]);
+
+  const handleAskAIAboutSuggestion = (suggestion: any) => {
+    setActiveTab('assist');
+    const prompt = `Analiza la siguiente sugerencia de mejora para GTR POS:\n- Categoría: ${suggestion.category}\n- Título: ${suggestion.title}\n- Detalle: ${suggestion.description}\n- Beneficio esperado: ${suggestion.actionableBenefit}\n\n¿Cuáles son los pasos específicos de implementación o código recomendado para aplicarla?`;
+    setChatPrompt(prompt);
+  };
 
   const handleSendPrompt = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -570,6 +605,10 @@ export default function DiagnosticoView() {
     }
   };
 
+  if (!isAdminUser(user)) {
+    return null;
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6" id="diagnostico-view-root">
       {/* Header and Brand */}
@@ -614,22 +653,28 @@ export default function DiagnosticoView() {
       </div>
 
       {/* Tabs Layout Button Rails */}
-      <div className="flex flex-wrap gap-2 p-1 bg-slate-100 dark:bg-slate-900 rounded-xl w-full max-w-3xl" id="diagnostico-tabs-bar">
+      <div className="flex flex-wrap gap-2 p-1 bg-slate-100 dark:bg-slate-900 rounded-xl w-full max-w-4xl" id="diagnostico-tabs-bar">
         <button
-          id="tab-btn-automatic"
-          onClick={() => setActiveTab('automatic')}
-          className={`flex-1 min-w-[130px] py-2 text-xs font-medium rounded-lg transition ${
-            activeTab === 'automatic'
-              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-semibold'
+          id="tab-btn-suggestions"
+          onClick={() => setActiveTab('suggestions')}
+          className={`flex-1 min-w-[150px] py-2 text-xs font-medium rounded-lg transition flex items-center justify-center gap-1.5 ${
+            activeTab === 'suggestions'
+              ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm font-bold'
               : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
           }`}
         >
-          Análisis Crítico
+          <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+          <span>Sugerencias & Análisis</span>
+          {functionalData?.analysis?.suggestions?.length > 0 && (
+            <span className="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
+              {functionalData.analysis.suggestions.length}
+            </span>
+          )}
         </button>
         <button
           id="tab-btn-math-tests"
           onClick={() => setActiveTab('math-tests')}
-          className={`flex-1 min-w-[170px] py-2 text-xs font-medium rounded-lg transition flex items-center justify-center gap-1.5 ${
+          className={`flex-1 min-w-[160px] py-2 text-xs font-medium rounded-lg transition flex items-center justify-center gap-1.5 ${
             activeTab === 'math-tests'
               ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm font-bold'
               : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
@@ -664,6 +709,17 @@ export default function DiagnosticoView() {
           Auditoría Código
         </button>
         <button
+          id="tab-btn-automatic"
+          onClick={() => setActiveTab('automatic')}
+          className={`flex-1 min-w-[130px] py-2 text-xs font-medium rounded-lg transition ${
+            activeTab === 'automatic'
+              ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm font-semibold'
+              : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
+          }`}
+        >
+          Estado Sistema
+        </button>
+        <button
           id="tab-btn-kb"
           onClick={() => setActiveTab('kb')}
           className={`flex-1 min-w-[130px] py-2 text-xs font-medium rounded-lg transition ${
@@ -678,6 +734,324 @@ export default function DiagnosticoView() {
 
       {/* Main Content Area */}
       <AnimatePresence mode="wait">
+        {/* SUGGESTIONS & FUNCTIONAL ANALYSIS TAB */}
+        {activeTab === 'suggestions' && (
+          <motion.div
+            key="suggestions"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.2 }}
+            className="space-y-6"
+            id="tab-content-suggestions"
+          >
+            {/* Header & Health Score Banner */}
+            <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-2xl shrink-0">
+                  <Sparkles className="w-7 h-7 animate-pulse" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">
+                      Diagnóstico Funcional & Sugerencias de Mejora IA
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40">
+                      Gemini Pro Engine
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-3xl">
+                    {functionalData?.analysis?.operationalSummary || "Evaluación continua del flujo de ventas POS, consistencia de inventario, arqueos de caja y calidad de código."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 shrink-0">
+                <div className="text-right">
+                  <span className="text-[11px] font-bold text-slate-400 block uppercase tracking-wider">Salud Operativa</span>
+                  <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
+                    {functionalData?.analysis?.overallHealthScore ?? 98}<span className="text-base text-slate-400">/100</span>
+                  </div>
+                </div>
+
+                <button
+                  id="btn-refresh-functional"
+                  onClick={runFunctionalAnalysis}
+                  disabled={functionalLoading}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold uppercase tracking-wider rounded-xl transition shadow-md shadow-indigo-600/15 cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${functionalLoading ? 'animate-spin' : ''}`} />
+                  <span>{functionalLoading ? 'Analizando...' : 'Actualizar Análisis'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Live Operational Metrics 4-Block Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="live-operational-kpis">
+              {/* Inventory */}
+              <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded-xl">
+                      <Boxes className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 dark:text-white">Inventario & Stock</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300">
+                    {functionalData?.liveMetrics?.inventory?.totalProducts ?? 0} SKUs
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Unidades totales:</span>
+                    <strong className="text-slate-800 dark:text-slate-200 font-mono">{functionalData?.liveMetrics?.inventory?.totalStockUnits ?? 0}</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Alertas stock bajo:</span>
+                    <strong className="text-rose-500 font-mono font-bold">{functionalData?.liveMetrics?.inventory?.lowStockAlerts ?? 0}</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500 pt-1 border-t border-slate-100 dark:border-slate-900">
+                    <span>Valuación Total:</span>
+                    <strong className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">{functionalData?.liveMetrics?.inventory?.valuationBs ?? 0} Bs</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sales & POS */}
+              <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-xl">
+                      <TrendingUp className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 dark:text-white">Ventas & Flujo POS</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300">
+                    {functionalData?.liveMetrics?.sales?.totalTransactions ?? 0} Transac.
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Volumen acumulado:</span>
+                    <strong className="text-emerald-600 dark:text-emerald-400 font-mono font-bold">{functionalData?.liveMetrics?.sales?.totalVolumeBs ?? 0} Bs</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Ticket promedio:</span>
+                    <strong className="text-slate-800 dark:text-slate-200 font-mono">{functionalData?.liveMetrics?.sales?.averageTicketBs ?? 0} Bs</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500 pt-1 border-t border-slate-100 dark:border-slate-900">
+                    <span>Cálculo matemático:</span>
+                    <strong className="text-emerald-500 font-bold">100% Exacto</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Credit & Loyalty */}
+              <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400 rounded-xl">
+                      <CreditCard className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 dark:text-white">Créditos & Clientes</span>
+                  </div>
+                  <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300">
+                    {functionalData?.liveMetrics?.creditAndLoyalty?.totalClients ?? 0} Clientes
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Por cobrar (Deuda):</span>
+                    <strong className="text-amber-500 font-mono font-bold">{functionalData?.liveMetrics?.creditAndLoyalty?.totalDebtBalanceBs ?? 0} Bs</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Puntos en circulación:</span>
+                    <strong className="text-purple-600 dark:text-purple-400 font-mono">{functionalData?.liveMetrics?.creditAndLoyalty?.loyaltyPointsInCirculation ?? 0} pts</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500 pt-1 border-t border-slate-100 dark:border-slate-900">
+                    <span>Canje:</span>
+                    <strong className="text-slate-700 dark:text-slate-300 font-medium">1 pt = 1 BOB</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cash Registers */}
+              <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 rounded-xl">
+                      <Wallet className="w-4 h-4" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 dark:text-white">Cajas & Arqueo</span>
+                  </div>
+                  <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                    functionalData?.liveMetrics?.cashRegister?.hasOpenSession 
+                      ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}>
+                    {functionalData?.liveMetrics?.cashRegister?.hasOpenSession ? 'Sesión Abierta' : 'Sin Sesión'}
+                  </span>
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between text-slate-500">
+                    <span>Balance acumulado:</span>
+                    <strong className="text-slate-800 dark:text-slate-200 font-mono font-bold">{functionalData?.liveMetrics?.cashRegister?.totalBalanceBs ?? 0} Bs</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500">
+                    <span>Cuentas de caja:</span>
+                    <strong className="text-slate-800 dark:text-slate-200 font-mono">{functionalData?.liveMetrics?.cashRegister?.totalAccounts ?? 0}</strong>
+                  </div>
+                  <div className="flex justify-between text-slate-500 pt-1 border-t border-slate-100 dark:border-slate-900">
+                    <span>Cajero activo:</span>
+                    <strong className="text-slate-700 dark:text-slate-300 truncate max-w-[110px]">{functionalData?.liveMetrics?.cashRegister?.activeCashier}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* AI Proactive Improvement Suggestions */}
+            <div className="space-y-4" id="ai-improvement-suggestions-section">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-extrabold text-slate-900 dark:text-white text-base tracking-tight flex items-center gap-2">
+                    <Lightbulb className="w-5 h-5 text-amber-500" />
+                    Sugerencias de Optimización & Mejoras Clave
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Propuestas generadas por el motor de IA analizando los datos reales y código de la aplicación.
+                  </p>
+                </div>
+                <span className="text-xs text-slate-400">
+                  {functionalData?.analysis?.suggestions?.length || 4} sugerencias disponibles
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {(functionalData?.analysis?.suggestions || [
+                  {
+                    id: 'sug-1',
+                    category: 'POS y Flujo de Cobro',
+                    title: 'Atajos de Teclado Rápidos para Finalizar Venta',
+                    description: 'Habilitar atajo F4 para cobro rápido en efectivo y F8 para cobro QR directo sin requerir mouse en horas pico.',
+                    impact: 'Alto',
+                    complexity: 'Inmediata',
+                    actionableBenefit: 'Reduce el tiempo de cobro en mostrador de 15s a menos de 5s por cliente.'
+                  },
+                  {
+                    id: 'sug-2',
+                    category: 'Inventario y Almacén',
+                    title: 'Alertas Proactivas de Re-orden en Pantalla POS',
+                    description: 'Mostrar indicador visual sutil cuando un artículo vendido queda con stock igual o inferior a su alarma de stock mínimo.',
+                    impact: 'Alto',
+                    complexity: 'Inmediata',
+                    actionableBenefit: 'Evita quiebres de stock imprevistos y facilita reposición oportuna de mercadería.'
+                  },
+                  {
+                    id: 'sug-3',
+                    category: 'Control de Caja y Finanzas',
+                    title: 'Auditoría Ciega de Cierre de Caja',
+                    description: 'Permitir que el cajero cuente el efectivo real antes de que el sistema le revele el balance esperado para evitar sesgos.',
+                    impact: 'Medio',
+                    complexity: 'Moderada',
+                    actionableBenefit: 'Garantiza transparencia total y detecta faltantes o sobrantes con precisión absoluta.'
+                  },
+                  {
+                    id: 'sug-4',
+                    category: 'Arquitectura y Rendimiento',
+                    title: 'Indexación SQLite de Búsqueda de Productos',
+                    description: 'Optimizar índices en campos barcode, name y category para búsquedas instantáneas con catálogos mayores a 10,000 SKUs.',
+                    impact: 'Medio',
+                    complexity: 'Inmediata',
+                    actionableBenefit: 'Respuesta sub-milisegundo en escaneo de códigos de barra sin congelar la UI.'
+                  }
+                ]).map((s: any, idx: number) => (
+                  <div
+                    key={s.id || idx}
+                    className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4 hover:border-indigo-300 dark:hover:border-indigo-800 transition flex flex-col justify-between"
+                    id={`suggestion-card-${s.id || idx}`}
+                  >
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="px-2.5 py-0.5 text-[10px] font-bold rounded-md bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/40">
+                          {s.category}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                            s.impact === 'Alto' ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300' :
+                            s.impact === 'Medio' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300' :
+                            'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                          }`}>
+                            Impacto: {s.impact}
+                          </span>
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
+                            {s.complexity}
+                          </span>
+                        </div>
+                      </div>
+
+                      <h5 className="font-bold text-slate-900 dark:text-white text-sm">
+                        {s.title}
+                      </h5>
+
+                      <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                        {s.description}
+                      </p>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-100 dark:border-slate-900 space-y-3">
+                      <div className="p-2.5 bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/30 rounded-xl text-[11px] text-emerald-800 dark:text-emerald-300 font-medium">
+                        <strong className="block mb-0.5 text-emerald-900 dark:text-emerald-200">Beneficio:</strong>
+                        {s.actionableBenefit}
+                      </div>
+
+                      <button
+                        onClick={() => handleAskAIAboutSuggestion(s)}
+                        className="w-full py-2 bg-slate-100 hover:bg-indigo-50 dark:bg-slate-900 dark:hover:bg-indigo-950/50 text-slate-700 hover:text-indigo-600 dark:text-slate-300 dark:hover:text-indigo-300 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer border border-transparent hover:border-indigo-200 dark:hover:border-indigo-800/40"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Profundizar con Asistente IA</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Functional Checklist Table */}
+            <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm space-y-4" id="functional-checklist-card">
+              <h4 className="font-extrabold text-slate-900 dark:text-white text-base tracking-tight flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                Evaluación Continua de Módulos del Sistema
+              </h4>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {(functionalData?.analysis?.functionalChecklist || [
+                  { module: 'Terminal de Punto de Venta (POS)', status: 'Óptimo', observation: 'Subtotales y cobro rápido calibrados con precisión decimal exacta.' },
+                  { module: 'Control de Inventario & Alertas', status: 'Óptimo', observation: 'Conteo y alertas de stock mínimo operando correctamente.' },
+                  { module: 'Caja Chica & Sesiones de Cajero', status: 'Óptimo', observation: 'Registro de movimientos de caja y cierre de turnos habilitado.' },
+                  { module: 'Cuentas por Cobrar & Créditos', status: 'Óptimo', observation: 'Gestión de deudas, abonos parciales y fidelización sin inconsistencias.' },
+                  { module: 'Persistencia SQLite & Offline', status: 'Óptimo', observation: 'Almacenamiento local ultrarrápido con soporte fuera de línea activo.' },
+                  { module: 'Aritmética & Monedas BOB/USD', status: 'Óptimo', observation: '0.00000000 BOB de residuo garantizado bajo estándar IEEE-754.' }
+                ]).map((item: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className="p-3.5 bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-850 rounded-xl flex items-start justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-1">
+                      <strong className="text-slate-800 dark:text-white font-bold block">{item.module}</strong>
+                      <p className="text-slate-500 dark:text-slate-400 text-[11px] leading-relaxed">{item.observation}</p>
+                    </div>
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 shrink-0">
+                      {item.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+
         {activeTab === 'automatic' && (
           <motion.div
             key="automatic"

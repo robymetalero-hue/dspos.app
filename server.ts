@@ -1076,25 +1076,64 @@ Debes responder estrictamente usando el siguiente formato JSON. No incluyas otra
     }
   });
 
-  // REST API: AI Diagnostics & Integrity audits (System diagnosis)
+  // REST API: AI Diagnostics, Functional Analysis & Integrity Audits
+  // STRICT ADMIN RBAC: Only admin, propietario or master system accounts can access diagnostic endpoints
+  app.use("/api/diagnose", (req, res, next) => {
+    const role = String(req.headers['x-user-role'] || (req as any).auditUser?.userRole || '').toLowerCase();
+    const username = String(req.headers['x-user-username'] || (req as any).auditUser?.userName || '').toLowerCase();
+    const userId = (req as any).auditUser?.userId;
+
+    const isAdmin = role === 'admin' || role === 'propietario' || role === 'administrador' || username === 'admin' || username === 'roby' || userId === 1;
+
+    if (!isAdmin) {
+      return res.status(403).json({
+        error: "Acceso denegado: Las funciones de diagnóstico técnico, auditoría profunda de código y mejoras por IA están estrictamente restringidas a administradores del sistema."
+      });
+    }
+    next();
+  });
+
   app.post("/api/diagnose/gemini", async (req, res) => {
     const { prompt, context } = req.body;
     try {
-      const systemInstruction = `Eres "Ingeniero Principal de Aseguramiento de Calidad GTR" (Chief QA & Lead Software Engineer).
-Tu rol es diagnosticar y auditar fallas del terminal de caja fiscal GTR POS.
-El usuario te proporcionará un detalle de problema, un fragmento de código, una queja de cálculo, un error de Sincronización, o una descripción.
-Debes preparar un reporte de diagnóstico extremadamente detallado, estructurado y profesional en español, que contenga:
-1. DESCRIPCIÓN TÉCNICA DEL PROBLEMA: Por qué ocurre el error (ej. flotantes de JS, problemas de concurrencia en SQLite, bloqueos de Service Workers, etc.).
-2. CATEGORÍA: Clasifícalo estrictamente en una de estas categorías: [Falla de Código], [Falla de Lógica], [Falla de Estructura/UX], o [Falla de Cálculo].
-3. DIAGNÓSTICO DETALLADO: Explicación paso a paso de los factores mecánicos involucrados.
-4. REMEDIO Y SOLUCIÓN DE CÓDIGO: Proporciona el código corregido exacto o la lógica matemática requerida para arreglarlo de raíz.
-5. RECOMENDACIÓN DE PREVENCIÓN: Qué pruebas de aserción o unitarias implementar para prevenir su recurrencia.
+      // Gather live database metrics to give the AI real situational awareness
+      let dbSummary: any = {};
+      try {
+        const pCount = db.prepare("SELECT count(*) as count, sum(stock) as totalStock, sum(case when stock <= stock_alarm then 1 else 0 end) as lowStock FROM products").get() as any;
+        const sCount = db.prepare("SELECT count(*) as count, coalesce(sum(total_amount), 0) as totalVolume FROM sales").get() as any;
+        const cCount = db.prepare("SELECT count(*) as count, coalesce(sum(debt_balance), 0) as totalDebt, coalesce(sum(loyalty_points), 0) as totalPoints FROM clients").get() as any;
+        const cashCount = db.prepare("SELECT count(*) as count, coalesce(sum(current_balance), 0) as totalBalance FROM cash_accounts").get() as any;
+        
+        dbSummary = {
+          products: { count: pCount?.count || 0, totalStock: pCount?.totalStock || 0, lowStockAlerts: pCount?.lowStock || 0 },
+          sales: { count: sCount?.count || 0, totalVolumeBs: Math.round((sCount?.totalVolume || 0) * 100) / 100 },
+          clients: { count: cCount?.count || 0, totalDebtBs: Math.round((cCount?.totalDebt || 0) * 100) / 100, loyaltyPointsInCirculation: cCount?.totalPoints || 0 },
+          cashAccounts: { count: cashCount?.count || 0, totalBalanceBs: Math.round((cashCount?.totalBalance || 0) * 100) / 100 }
+        };
+      } catch (e) {
+        console.warn("Could not fetch DB summary for AI context:", e);
+      }
 
-Sé muy analítico, humilde en la redacción, usa términos técnicos precisos (ej. imprecisión de punto flotante de doble precisión IEEE 754, race conditions, closures caducas de React). No inventes información.`;
+      const systemInstruction = `Eres el "Ingeniero Principal de Sistemas & Analista de Calidad de la Aplicación Web GTR POS".
+Tu objetivo es analizar a fondo el funcionamiento, estado de datos, precisión de cálculos y código de la aplicación web de punto de venta.
+El sistema cuenta con las siguientes áreas funcionales:
+1. Terminal POS: Carrito rápido, escáner de código de barras, cobro multi-moneda BOB/USD, promociones, canje de puntos y descuentos (sin impuestos ni IVA).
+2. Inventario: Precios unitario, mayoreo y costo, control de stock mínimo con alarmas, SKU y categorización.
+3. Cajas y Arqueos: Gestión de caja chica, registro de ingresos/egresos, conciliación y apertura/cierre de sesión.
+4. Cuentas por Cobrar & Créditos: Gestión de deuda de clientes, abonos parciales y límites de crédito.
+5. Fidelización: Puntos de cliente acumulables y canjeables 1 a 1 en BOB.
+6. Resiliencia & Red: Almacenamiento local SQLite con sincronización a la nube (Firestore) y soporte offline.
+
+Cuando el usuario te pregunte o pida análisis, sugerencias de mejora o diagnóstico:
+- Proporciona respuestas claras, estructuradas y directamente aplicables.
+- Si detectas una falla o problema potencial, explica la causa raíz (ej. coma flotante IEEE 754, race condition, validación faltante, desborde de memoria) y provee el código corregido o la fórmula matemática exacta.
+- Si te piden sugerencias de mejora, organízalas en áreas claras: [Velocidad & Experiencia POS], [Control Financiero & Cajas], [Inventario Inteligente], [Seguridad & Robustez de Código].
+- No menciones ni agregues impuestos, IVA ni porcentaje de facturación, ya que el usuario opera con cálculos matemáticos puros directos.
+- Responde siempre en español formal, técnico y conciso.`;
 
       const response = await getAI().models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: `Consulta del operario/desarrollador POS:\n${prompt}\n\nContexto adicional del sistema:\n${JSON.stringify(context || {})}`,
+        model: "gemini-3.7-flash",
+        contents: `Consulta del usuario/operador:\n${prompt}\n\nMétricas en vivo de la base de datos:\n${JSON.stringify(dbSummary)}\n\nContexto adicional del cliente:\n${JSON.stringify(context || {})}`,
         config: {
           systemInstruction,
           temperature: 0.2,
@@ -1109,12 +1148,133 @@ Sé muy analítico, humilde en la redacción, usa términos técnicos precisos (
     }
   });
 
+  // REST API: Live Functional Analysis & Proactive Suggestions
+  app.get("/api/diagnose/functional-analysis", async (req, res) => {
+    try {
+      // 1. Gather database state
+      const pStats = db.prepare("SELECT count(*) as total, sum(stock) as stock, sum(case when stock <= stock_alarm then 1 else 0 end) as lowStock, sum(price_unit * stock) as totalValuation FROM products").get() as any;
+      const sStats = db.prepare("SELECT count(*) as total, coalesce(sum(total_amount), 0) as volume, coalesce(avg(total_amount), 0) as avgTicket FROM sales").get() as any;
+      const cStats = db.prepare("SELECT count(*) as total, coalesce(sum(debt_balance), 0) as totalDebt, coalesce(sum(loyalty_points), 0) as totalPoints FROM clients").get() as any;
+      const cashStats = db.prepare("SELECT count(*) as total, coalesce(sum(current_balance), 0) as balance FROM cash_accounts").get() as any;
+      const activeSession = db.prepare("SELECT id, cashier_name, opened_at, initial_cash FROM cash_register_sessions WHERE status = 'open' ORDER BY id DESC LIMIT 1").get() as any;
+
+      const liveMetrics = {
+        inventory: {
+          totalProducts: pStats?.total || 0,
+          totalStockUnits: pStats?.stock || 0,
+          lowStockAlerts: pStats?.lowStock || 0,
+          valuationBs: Math.round((pStats?.totalValuation || 0) * 100) / 100
+        },
+        sales: {
+          totalTransactions: sStats?.total || 0,
+          totalVolumeBs: Math.round((sStats?.volume || 0) * 100) / 100,
+          averageTicketBs: Math.round((sStats?.avgTicket || 0) * 100) / 100
+        },
+        creditAndLoyalty: {
+          totalClients: cStats?.total || 0,
+          totalDebtBalanceBs: Math.round((cStats?.totalDebt || 0) * 100) / 100,
+          loyaltyPointsInCirculation: cStats?.totalPoints || 0
+        },
+        cashRegister: {
+          totalAccounts: cashStats?.total || 0,
+          totalBalanceBs: Math.round((cashStats?.balance || 0) * 100) / 100,
+          hasOpenSession: !!activeSession,
+          activeCashier: activeSession?.cashier_name || "Ninguna sesión activa"
+        }
+      };
+
+      // 2. Query Gemini for deep functional suggestions
+      const prompt = `Analiza el estado operativo actual de la aplicación web GTR POS y genera un diagnóstico funcional integral con sugerencias de mejora de alto impacto.
+Métricas operativas reales:
+${JSON.stringify(liveMetrics, null, 2)}
+
+Estructura el resultado estrictamente en JSON con sugerencias categorizadas en:
+1. 'POS y Flujo de Cobro'
+2. 'Control de Caja y Finanzas'
+3. 'Inventario y Almacén'
+4. 'Arquitectura y Rendimiento'
+
+No agregues IVA ni impuestos, solo optimizaciones operativas, de precisión matemática y usabilidad.`;
+
+      const systemInstruction = `Eres el "Analista Senior de Arquitectura & Calidad de Software GTR POS".
+Tu misión es generar recomendaciones prácticas y diagnósticos precisos sobre el estado del sistema.
+Responde estrictamente con un objeto JSON válido según el esquema solicitado. Todos los textos deben ser en español profesional.`;
+
+      const response = await getAI().models.generateContent({
+        model: "gemini-3.7-flash",
+        contents: prompt,
+        config: {
+          systemInstruction,
+          temperature: 0.2,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              overallHealthScore: { type: Type.INTEGER, description: "Puntaje de salud operativa de 0 a 100" },
+              operationalSummary: { type: Type.STRING, description: "Resumen ejecutivo del estado funcional" },
+              liveMetricsSummary: {
+                type: Type.OBJECT,
+                properties: {
+                  inventoryStatus: { type: Type.STRING },
+                  cashStatus: { type: Type.STRING },
+                  creditRiskStatus: { type: Type.STRING }
+                },
+                required: ["inventoryStatus", "cashStatus", "creditRiskStatus"]
+              },
+              suggestions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    category: { type: Type.STRING, description: "POS y Flujo de Cobro | Control de Caja y Finanzas | Inventario y Almacén | Arquitectura y Rendimiento" },
+                    title: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    impact: { type: Type.STRING, description: "Alto | Medio | Bajo" },
+                    complexity: { type: Type.STRING, description: "Inmediata | Moderada | Avanzada" },
+                    actionableBenefit: { type: Type.STRING }
+                  },
+                  required: ["id", "category", "title", "description", "impact", "complexity", "actionableBenefit"]
+                }
+              },
+              functionalChecklist: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    module: { type: Type.STRING },
+                    status: { type: Type.STRING, description: "Óptimo | Requiere Atención | Recomendado" },
+                    observation: { type: Type.STRING }
+                  },
+                  required: ["module", "status", "observation"]
+                }
+              }
+            },
+            required: ["overallHealthScore", "operationalSummary", "liveMetricsSummary", "suggestions", "functionalChecklist"]
+          }
+        }
+      });
+
+      const parsed = JSON.parse(response.text || "{}");
+      res.json({
+        success: true,
+        liveMetrics,
+        analysis: parsed
+      });
+
+    } catch (e: any) {
+      console.error("Failed to execute functional analysis:", e);
+      res.status(500).json({ error: "Fallo al ejecutar análisis funcional: " + formatGeminiError(e) });
+    }
+  });
+
   // REST API: Deep IA Code Review Auditor
   app.get("/api/diagnose/code-review", async (req, res) => {
     try {
       const filesToScan = [
         "src/context/AppContext.tsx",
         "src/views/DiagnosticoView.tsx",
+        "src/utils/fiscalMath.ts",
         "package.json"
       ];
 
@@ -1133,7 +1293,6 @@ Sé muy analítico, humilde en la redacción, usa términos técnicos precisos (
       const serverPath = path.join(process.cwd(), "server.ts");
       if (fs.existsSync(serverPath)) {
         const content = fs.readFileSync(serverPath, "utf-8");
-        // Pull first 350 lines to check startup routines, cors, middleware
         const headerSlice = content.slice(0, 15000) + "\n...[SLICED FOR COGNITIVE EFFICIENCY]...";
         scannedContents.push(`### ARCHIVO: server.ts (Cabecera y Rutas Base) ###\n${headerSlice}`);
       }
@@ -1144,11 +1303,11 @@ Sé muy analítico, humilde en la redacción, usa términos técnicos precisos (
       const promptContext = `
 A continuación se detallan los archivos fuente del proyecto POS actual junto con su estado exacto en disco.
 Analiza cada archivo buscando:
-1. Imprecisiones en cálculos matemáticos (especialmente tasas de cambio, impuestos redondeados en Bolivia, conversión pesos/bolivianos).
+1. Imprecisiones en cálculos matemáticos (subtotales, descuentos %, puntos de lealtad, conversión de tasa de cambio BOB/USD).
 2. Problemas de estado, manipulación directa de DOM, o re-renderizados infinitos en React.
 3. Fallas en flujos de sincronización de Firebase o SQLite local.
 4. Desajustes de interfaz táctil y de accesibilidad general (ej. controles de colisión táctil o botones < 44px).
-5. Errores de lógica en modificadores de cantidad del carrito (ej. el error de carga fantasma +11 al pedir 10 por voz).
+5. Errores de lógica en modificadores de cantidad del carrito.
 
 MÉTRICAS DE BASE DE DATOS LOCAL:
 - Productos en total: ${productsCount?.count || 0}
@@ -1159,11 +1318,11 @@ ${scannedContents.join("\n\n")}
 `;
 
       const systemInstruction = `Eres un "Auditor Senior de Código IA - Aseguramiento de Calidad GTR".
-Tu misión es actuar como el cerebro de control de calidad más avanzado del sistema de caja fiscal GTR POS. Analiza el código fuente provisto, identifica cada error real o potencial (fallas lógicas, desvío de redondeo, service workers, touch targets, re-renders) y estructura un JSON detallado, explicativo y con sus remedios exactos.
+Tu misión es actuar como el cerebro de control de calidad más avanzado del sistema GTR POS. Analiza el código fuente provisto, identifica cada error real o potencial (fallas lógicas, desvío de redondeo, service workers, touch targets, re-renders) y estructura un JSON detallado, explicativo y con sus remedios exactos.
 Responde estrictamente en formato JSON utilizando el esquema requerido. No uses texto explicativo por fuera del JSON. Todo el texto de explicación, títulos y propuestas debe estar redactado en español formal, corporativo e impecable.`;
 
       const response = await getAI().models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.7-flash",
         contents: promptContext,
         config: {
           systemInstruction,
@@ -1222,9 +1381,9 @@ Responde estrictamente en formato JSON utilizando el esquema requerido. No uses 
             const filePath = path.join(viewsDir, file);
             const content = fs.readFileSync(filePath, "utf-8");
             
-            // To keep context sizes optimal, extract key chunks like event handlers, rounding statements, hooks or state definitions.
+            // Extract relevant lines
             const lines = content.split("\n");
-            const relevantLines = lines.filter((line, index) => {
+            const relevantLines = lines.filter((line) => {
               const lower = line.toLowerCase();
               return (
                 lower.includes("price") ||
@@ -1240,7 +1399,6 @@ Responde estrictamente en formato JSON utilizando el esquema requerido. No uses 
               );
             });
 
-            // Sample max 150 lines or pick header + relevant lines to give a cohesive technical footprint
             const header = lines.slice(0, 30).join("\n");
             const bodySample = relevantLines.slice(0, 120).join("\n");
             const footerSample = lines.slice(-20).join("\n");
@@ -1279,9 +1437,9 @@ ${bodySample}
 
       const promptContext = `
 Eres un "SISTEMA INTEGRAL DE AUDITORÍA AUTÓNOMA GTR - QA ENGINE".
-A continuación se te suministran los extractos de código lógicos y matemáticos de TODAS las vistas que componen la aplicación web GTR POS en Cochabamba, Bolivia.
+A continuación se te suministran los extractos de código lógicos y matemáticos de TODAS las vistas que componen la aplicación web GTR POS.
 Tu tarea es realizar una revisión técnica exhaustiva buscando fallas del sistema:
-- Redondeo numérico en transacciones o impuestos.
+- Redondeo numérico en transacciones o conversiones BOB/USD.
 - Touch target menor a 44px.
 - Defectos de concurrencia local vs remota.
 - Cargas fantasma en el carrito.
@@ -1301,7 +1459,7 @@ Debes identificar errores, áreas de mejora y nuevas funciones recomendadas, est
 Responde estrictamente en formato JSON utilizando el esquema de salida indicado, en español formal y sumamente profesional.`;
 
       const response = await getAI().models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.7-flash",
         contents: promptContext,
         config: {
           systemInstruction,

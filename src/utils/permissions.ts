@@ -76,7 +76,17 @@ export const DEFAULT_PERMISSIONS: Record<string, boolean> = {
   admin_permissions: false,
   view_audit: false,
   access_ai: true,
+  view_diagnostics: false,
 };
+
+/**
+ * Helper to identify if user is Admin / Propietario / Master Account.
+ */
+export function isAdminUser(user: any): boolean {
+  if (!user) return false;
+  if (user.role === 'admin' || user.role === 'propietario' || user.role === 'administrador') return true;
+  return isMainAdmin(user);
+}
 
 /**
  * Normalizes user permissions, resolving aliases and supplying default values for missing keys.

@@ -2,7 +2,7 @@ import { safeDispatchEvent } from "./utils/events";
 import React, { useState, useEffect, useLayoutEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppProvider, useAppContext } from './context/AppContext';
-import { hasPermission } from './utils/permissions';
+import { hasPermission, isMainAdmin, isAdminUser } from './utils/permissions';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { startAutoBackupScheduler } from "./utils/driveBackupScheduler";
 import { hardRefreshApp } from "./utils/appRefresh";
@@ -431,6 +431,9 @@ function AppLayout() {
         if (user && (user.role as string) !== 'none' && user.username !== 'none') {
             loadWorkers();
         }
+        if (view === 'diagnostico' && !isAdminUser(user)) {
+            setView('pos');
+        }
     }, [view, user]);
 
     if (!user || (user.role as string) === 'none' || user.username === 'none') {
@@ -626,7 +629,7 @@ function AppLayout() {
                         {renderNavItem('auditoria', 'Registro de Actividad', History, 'view_audit')}
                         {renderNavItem('configuraciones', 'Configuraciones', Settings)}
                         {renderNavItem('hardware', 'Conexión de Hardware', Cpu)}
-                        {renderNavItem('diagnostico', 'Diagnósticos GTR', Activity)}
+                        {isAdminUser(user) && renderNavItem('diagnostico', 'Diagnósticos & IA', Activity, 'view_diagnostics')}
                         {user?.role === 'admin' && renderNavItem('usuarios', 'Usuarios', Users)}
                     </div>
                 </div>
@@ -945,6 +948,7 @@ function AppLayout() {
                                     {renderNavItem('analisis', 'Análisis Productos', TrendingUp, 'view_reports')}
                                     {renderNavItem('cajas', 'Cajas & Ingresos', Landmark, 'manage_caja')}
                                     {renderNavItem('configuraciones', 'Configuraciones', Settings)}
+                                    {isAdminUser(user) && renderNavItem('diagnostico', 'Diagnósticos & IA', Activity, 'view_diagnostics')}
                                     {user?.role === 'admin' && renderNavItem('usuarios', 'Usuarios', Users)}
                                 </motion.div>
 
@@ -1153,7 +1157,7 @@ function AppLayout() {
                                 {view === 'conteo_fisico' && <PhysicalCountManager onClose={() => setView('pos')} />}
                                 {view === 'configuraciones' && <ConfiguracionesView />}
                                 {view === 'hardware' && <HardwareConfigView />}
-                                {view === 'diagnostico' && <DiagnosticoView />}
+                                {view === 'diagnostico' && (isAdminUser(user) ? <DiagnosticoView /> : <POS />)}
                             </React.Suspense>
                         </motion.div>
                     </AnimatePresence>

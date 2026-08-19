@@ -8,6 +8,8 @@ import { startAutoBackupScheduler } from "./utils/driveBackupScheduler";
 import { hardRefreshApp } from "./utils/appRefresh";
 import PhysicalCountManager from './components/PhysicalCountManager';
 import AudioVoice from './components/AudioVoice';
+import OfflineStatusHUD from './components/OfflineStatusHUD';
+import OfflineManagerModal from './components/OfflineManagerModal';
 import { Menu, X, Home, ShoppingCart, Clock, Receipt, PackageSearch, 
     Folder, ClipboardCheck, Undo2, LayoutDashboard, TrendingUp, 
     Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu
@@ -264,7 +266,8 @@ function AppLayout() {
     const { 
         darkMode, setDarkMode, user, setUser, view, setView, isOffline, isSyncing, triggerOnlineSync,
         isAutonomousTesting, setIsAutonomousTesting, autonomousStep, setAutonomousStep, autonomousLogs, setAutonomousLogs,
-        products, pwaPrompt, installPWA, isPwaInstalled, isInitializing, kioskMode, theme, setTheme, syncError
+        products, pwaPrompt, installPWA, isPwaInstalled, isInitializing, kioskMode, theme, setTheme, syncError,
+        isOfflineModalOpen, setIsOfflineModalOpen
     } = useAppContext();
     
     const isRgb = theme === 'rgb';
@@ -501,22 +504,9 @@ function AppLayout() {
                         </div>
                         <div className="flex flex-col">
                             <span className="font-sans font-black text-slate-850 dark:text-white text-base tracking-tight leading-none">Digital Store</span>
-                            {isOffline ? (
-                                <span className="text-[9px] font-extrabold text-amber-500/95 dark:text-amber-400 mt-1 uppercase tracking-widest font-mono flex items-center gap-1.5 transition-all duration-300">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                    Modo Local
-                                </span>
-                            ) : isSyncing ? (
-                                <span className="text-[9px] font-extrabold text-indigo-550 dark:text-indigo-400 mt-1 uppercase tracking-widest font-mono flex items-center gap-1.5 transition-all duration-300">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping" />
-                                    Sincronizando...
-                                </span>
-                            ) : (
-                                <span className="text-[9px] font-extrabold text-[#2563eb] mt-1 uppercase tracking-widest font-mono flex items-center gap-1.5 transition-all duration-300">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-[#2563eb]" />
-                                    Sincronizado
-                                </span>
-                            )}
+                            <div className="mt-1">
+                                <OfflineStatusHUD variant="badge" />
+                            </div>
                         </div>
                     </div>
                     {hasPermission(user, 'access_ai') && (
@@ -708,10 +698,9 @@ function AppLayout() {
                         </div>
                         <div className="flex flex-col">
                             <span className="font-sans font-black text-slate-850 dark:text-white text-base tracking-tight leading-none">Digital Store</span>
-                            <span className="text-[9px] font-extrabold text-amber-500 mt-1 uppercase tracking-widest font-mono flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                                Modo Kiosko
-                            </span>
+                            <div className="mt-1">
+                                <OfflineStatusHUD variant="badge" />
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1077,35 +1066,12 @@ function AppLayout() {
                         </motion.div>
                     </button>
                     
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-2">
                         <div className="w-6 h-6 rounded-lg bg-indigo-650 flex items-center justify-center text-white">
                             <Sparkles size={11} />
                         </div>
                         <span className="font-sans font-black text-slate-850 dark:text-white text-sm tracking-tight leading-none uppercase">GTR POS</span>
-                        {isOffline ? (
-                            <span className="text-[8px] font-extrabold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono">
-                                Local
-                            </span>
-                        ) : isSyncing ? (
-                            <span className="text-[8px] font-extrabold text-indigo-500 bg-indigo-500/10 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono animate-pulse">
-                                Sincronizando...
-                            </span>
-                        ) : syncError ? (
-                            <button 
-                                onClick={() => triggerOnlineSync()}
-                                title={`Error de sincronización: ${syncError}. Haz clic para reintentar.`}
-                                className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono cursor-pointer hover:opacity-80 transition-opacity ${
-                                syncError.toLowerCase().includes('quota') || syncError.toLowerCase().includes('resource_exhausted')
-                                    ? 'text-rose-500 bg-rose-500/10 border border-rose-500/20'
-                                    : 'text-rose-400 bg-rose-400/10 border border-rose-400/15'
-                            }`}>
-                                {syncError.toLowerCase().includes('quota') || syncError.toLowerCase().includes('resource_exhausted') ? 'Cuota Lim.' : 'Reintentar Sync'}
-                            </button>
-                        ) : (
-                            <span className="text-[8px] font-extrabold text-[#2563eb] bg-[#2563eb]/10 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono">
-                                Online
-                            </span>
-                        )}
+                        <OfflineStatusHUD variant="compact" />
                     </div>
 
                     <div className="flex items-center gap-1.5">
@@ -1486,6 +1452,12 @@ function AppLayout() {
 
             {/* AI Voice modality interactive assistant */}
             <AudioVoice />
+
+            {/* Offline Control Center & Diagnostics Modal */}
+            <OfflineManagerModal 
+                isOpen={isOfflineModalOpen} 
+                onClose={() => setIsOfflineModalOpen(false)} 
+            />
         </div>
     );
 }

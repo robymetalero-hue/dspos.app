@@ -1,3 +1,5 @@
+import { safeDispatchEvent } from "./events";
+
 // Offline storage utility for GTR POS
 // Manages offline sales queueing in IndexedDB with fallback to LocalStorage
 
@@ -113,6 +115,7 @@ export async function saveOfflineSale(salePayload: any, clientName?: string, cli
             request.onsuccess = () => {
                 db.close();
                 console.log('[Offline DB] Sale saved successfully to IndexedDB:', offlineSale.id);
+                safeDispatchEvent('offline_queue_changed', { detail: { action: 'add_sale', sale: offlineSale } });
                 resolve(offlineSale);
             };
 
@@ -126,6 +129,7 @@ export async function saveOfflineSale(salePayload: any, clientName?: string, cli
         const queue = getLocalStorageQueue();
         queue.push(offlineSale);
         saveLocalStorageQueue(queue);
+        safeDispatchEvent('offline_queue_changed', { detail: { action: 'add_sale', sale: offlineSale } });
         return offlineSale;
     }
 }
@@ -171,6 +175,7 @@ export async function deleteOfflineSale(id: string): Promise<void> {
             request.onsuccess = () => {
                 db.close();
                 console.log('[Offline DB] Sale deleted from IndexedDB:', id);
+                safeDispatchEvent('offline_queue_changed', { detail: { action: 'delete_sale', id } });
                 resolve();
             };
 
@@ -184,6 +189,7 @@ export async function deleteOfflineSale(id: string): Promise<void> {
         const queue = getLocalStorageQueue();
         const filtered = queue.filter(item => item.id !== id);
         saveLocalStorageQueue(filtered);
+        safeDispatchEvent('offline_queue_changed', { detail: { action: 'delete_sale', id } });
     }
 }
 
@@ -247,6 +253,7 @@ export async function saveOfflineAction(
             request.onsuccess = () => {
                 db.close();
                 console.log('[Offline DB] Action saved successfully to IndexedDB:', offlineAction.id, `(${type})`);
+                safeDispatchEvent('offline_queue_changed', { detail: { action: 'add_action', item: offlineAction } });
                 resolve(offlineAction);
             };
 
@@ -260,6 +267,7 @@ export async function saveOfflineAction(
         const queue = getLocalStorageActionsQueue();
         queue.push(offlineAction);
         saveLocalStorageActionsQueue(queue);
+        safeDispatchEvent('offline_queue_changed', { detail: { action: 'add_action', item: offlineAction } });
         return offlineAction;
     }
 }
@@ -305,6 +313,7 @@ export async function deleteOfflineAction(id: string): Promise<void> {
             request.onsuccess = () => {
                 db.close();
                 console.log('[Offline DB] Action deleted from IndexedDB:', id);
+                safeDispatchEvent('offline_queue_changed', { detail: { action: 'delete_action', id } });
                 resolve();
             };
 
@@ -318,6 +327,7 @@ export async function deleteOfflineAction(id: string): Promise<void> {
         const queue = getLocalStorageActionsQueue();
         const filtered = queue.filter(item => item.id !== id);
         saveLocalStorageActionsQueue(filtered);
+        safeDispatchEvent('offline_queue_changed', { detail: { action: 'delete_action', id } });
     }
 }
 
@@ -327,6 +337,109 @@ export async function deleteOfflineAction(id: string): Promise<void> {
 export async function hasOfflineActions(): Promise<boolean> {
     const list = await getOfflineActions();
     return list.length > 0;
+}
+
+export interface OfflineStats {
+    salesCount: number;
+    actionsCount: number;
+    totalAmountBob: number;
+    totalAmountUsd: number;
+    oldestPendingDate: string | null;
+}
+
+/**
+ * Computes live statistics for all items waiting in offline queues
+ */
+export async function getOfflineStats(): Promise<OfflineStats> {
+    const [sales, actions] = await Promise.all([
+        getOfflineSales(),
+        getOfflineActions()
+    ]);
+
+    let totalBob = 0;
+    let totalUsd = 0;
+    let oldestDate: string | null = null;
+
+    for (const sale of sales) {
+        const payload = sale.salePayload || {};
+        const currency = payload.currency || 'BOB';
+        const total = Number(payload.total) || 0;
+
+        if (currency === 'USD') {
+            totalUsd += total;
+        } else {
+            totalBob += total;
+        }
+
+        if (sale.createdAt) {
+            if (!oldestDate || new Date(sale.createdAt) < new Date(oldestDate)) {
+                oldestDate = sale.createdAt;
+            }
+        }
+    }
+
+    for (const action of actions) {
+        if (action.createdAt) {
+            if (!oldestDate || new Date(action.createdAt) < new Date(oldestDate)) {
+                oldestDate = action.createdAt;
+            }
+        }
+    }
+
+    return {
+        salesCount: sales.length,
+        actionsCount: actions.length,
+        totalAmountBob: totalBob,
+        totalAmountUsd: totalUsd,
+        oldestPendingDate: oldestDate
+    };
+}
+
+/**
+ * Generates a full emergency export JSON payload containing all offline records
+ */
+export async function exportOfflineBackupJSON(): Promise<string> {
+    const [sales, actions] = await Promise.all([
+        getOfflineSales(),
+        getOfflineActions()
+    ]);
+
+    const backup = {
+        format: 'GTR_POS_OFFLINE_BACKUP_v2',
+        generatedAt: new Date().toISOString(),
+        deviceInfo: {
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+            platform: typeof navigator !== 'undefined' ? navigator.platform : ''
+        },
+        summary: {
+            salesCount: sales.length,
+            actionsCount: actions.length
+        },
+        offlineSales: sales,
+        offlineActions: actions
+    };
+
+    return JSON.stringify(backup, null, 2);
+}
+
+/**
+ * Triggers a direct browser download of the emergency offline backup file
+ */
+export async function downloadOfflineBackupFile(): Promise<void> {
+    const jsonStr = await exportOfflineBackupJSON();
+    const now = new Date();
+    const dateStr = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `GTR_POS_Respaldo_Offline_${dateStr}.json`;
+
+    const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 }
 
 /**

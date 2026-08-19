@@ -475,6 +475,15 @@ async function startServer() {
     console.warn("WebSocket Server wss error encountered:", error?.message || String(error));
   });
 
+  // Ultra-fast Health & Ping endpoint for offline health detection & latency measurement
+  app.get("/api/health", (req, res) => {
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      server: "GTR POS Core Engine"
+    });
+  });
+
   // REST API: Authentication & Roles
   app.post("/api/auth/login", loginLimiter, (req, res) => {
     const { username, password } = req.body;

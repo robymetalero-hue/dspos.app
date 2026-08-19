@@ -5,7 +5,18 @@ import { normalizePermissions } from '../utils/permissions';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { initializeFirestore, getFirestore, doc, setDoc, onSnapshot, getDocFromServer, setLogLevel } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { getOfflineSales, deleteOfflineSale, getOfflineActions, deleteOfflineAction, saveOfflineAction, hasOfflineActions, hasOfflineSales, cacheAppState, getCachedAppState } from '../utils/offlineStorage';
+import { 
+    getOfflineSales, 
+    deleteOfflineSale, 
+    getOfflineActions, 
+    deleteOfflineAction, 
+    saveOfflineAction, 
+    hasOfflineActions, 
+    hasOfflineSales, 
+    cacheAppState, 
+    getCachedAppState,
+    getOfflineStats
+} from '../utils/offlineStorage';
 
 // Initialize Client-Side Firebase SDK with auto-detect long polling to prevent stream timeouts
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -153,6 +164,16 @@ interface AppContextType {
     syncError: string | null;
     setSyncError: React.Dispatch<React.SetStateAction<string | null>>;
     
+    // Offline & Sync Engine
+    networkLatency: number | null;
+    networkQuality: 'online' | 'offline' | 'unstable';
+    pendingSalesCount: number;
+    pendingActionsCount: number;
+    isOfflineModalOpen: boolean;
+    setIsOfflineModalOpen: (b: boolean) => void;
+    deductLocalProductStock: (items: Array<{ product_id: number; quantity: number }>) => void;
+    registerLocalClient: (client: { id: string | number; name: string; phone?: string }) => void;
+
     // S.I.T.A. Autonomous QA Testing Systems
     isAutonomousTesting: boolean;
     setIsAutonomousTesting: (b: boolean) => void;
@@ -179,6 +200,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [isOffline, setIsOffline] = useState(() => !window.navigator.onLine);
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncError, setSyncError] = useState<string | null>(null);
+
+    // Offline & Sync Engine States
+    const [networkLatency, setNetworkLatency] = useState<number | null>(null);
+    const [networkQuality, setNetworkQuality] = useState<'online' | 'offline' | 'unstable'>('online');
+    const [pendingSalesCount, setPendingSalesCount] = useState<number>(0);
+    const [pendingActionsCount, setPendingActionsCount] = useState<number>(0);
+    const [isOfflineModalOpen, setIsOfflineModalOpen] = useState<boolean>(false);
 
     // PWA states
     const [pwaPrompt, setPwaPrompt] = useState<any>(null);
@@ -1031,6 +1059,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     };
 
+    // Real-time immediate local stock reduction for offline POS autonomy
+    const deductLocalProductStock = (items: Array<{ product_id: number; quantity: number }>) => {
+        if (!items || items.length === 0) return;
+        setProducts(prev => {
+            const itemMap = new Map(items.map(i => [Number(i.product_id), Number(i.quantity)]));
+            const updated = prev.map(p => {
+                if (itemMap.has(p.id)) {
+                    const qtyToDeduct = itemMap.get(p.id) || 0;
+                    const newStock = Math.max(0, p.stock - qtyToDeduct);
+                    return { ...p, stock: newStock };
+                }
+                return p;
+            });
+            try {
+                localStorage.setItem('cached_products', JSON.stringify(updated));
+                cacheAppState('cached_products', updated);
+            } catch (err) {
+                console.warn("Error caching updated products:", err);
+            }
+            return updated;
+        });
+    };
+
+    // Instant local client registration for offline search and POS matching
+    const registerLocalClient = (client: { id: string | number; name: string; phone?: string }) => {
+        if (!client || !client.name) return;
+        setClients(prev => {
+            const nameMatch = client.name.trim().toLowerCase();
+            const exists = prev.some(c => c.name.trim().toLowerCase() === nameMatch);
+            if (exists) return prev;
+
+            const newClient: Client = {
+                id: typeof client.id === 'number' ? client.id : -Date.now(),
+                name: client.name.trim(),
+                phone: client.phone ? client.phone.trim() : '',
+                points: 0
+            };
+            const updated = [newClient, ...prev];
+            try {
+                localStorage.setItem('cached_clients', JSON.stringify(updated));
+                cacheAppState('cached_clients', updated);
+            } catch (err) {
+                console.warn("Error caching updated clients:", err);
+            }
+            return updated;
+        });
+    };
+
     // STRICT ITEM CONSOLIDATION & QUANTITY ADDITION RULE (WITH STOCK LEVEL LITERALLY BOUNDED)
     const addToCart = (product: Product, quantity: number = 1) => {
         setCart(prev => {
@@ -1409,6 +1485,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, [user?.id, user?.username]);
 
 
+    // Global Offline Queue and Connectivity Monitoring
+    const refreshOfflineStats = async () => {
+        try {
+            const s = await getOfflineStats();
+            setPendingSalesCount(s.salesCount);
+            setPendingActionsCount(s.actionsCount);
+        } catch (e) {
+            // Ignore if db is initializing
+        }
+    };
+
+    useEffect(() => {
+        refreshOfflineStats();
+        const handleQueueChange = () => {
+            refreshOfflineStats();
+        };
+        const handleOpenModal = () => {
+            setIsOfflineModalOpen(true);
+        };
+        window.addEventListener('offline_queue_changed', handleQueueChange);
+        window.addEventListener('open-offline-manager', handleOpenModal);
+        return () => {
+            window.removeEventListener('offline_queue_changed', handleQueueChange);
+            window.removeEventListener('open-offline-manager', handleOpenModal);
+        };
+    }, []);
+
+    // Periodic network health check to measure latency and detect reconnection
+    useEffect(() => {
+        let timer: any = null;
+        let isCancelled = false;
+
+        const checkHealth = async () => {
+            if (!navigator.onLine) {
+                if (!isOffline) setIsOffline(true);
+                setNetworkQuality('offline');
+                setNetworkLatency(null);
+                return;
+            }
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3500);
+            const startTime = performance.now();
+
+            try {
+                const res = await fetch('/api/health', {
+                    method: 'GET',
+                    signal: controller.signal,
+                    cache: 'no-store'
+                });
+                clearTimeout(timeoutId);
+                const latency = Math.round(performance.now() - startTime);
+
+                if (!isCancelled) {
+                    if (res.ok) {
+                        setNetworkLatency(latency);
+                        const quality = latency > 600 ? 'unstable' : 'online';
+                        setNetworkQuality(quality);
+                        if (isOffline) {
+                            setIsOffline(false);
+                            triggerOnlineSync();
+                        }
+                    } else {
+                        setNetworkQuality('unstable');
+                    }
+                }
+            } catch (err: any) {
+                clearTimeout(timeoutId);
+                if (!isCancelled) {
+                    setNetworkLatency(null);
+                    setNetworkQuality('offline');
+                    if (!isOffline) setIsOffline(true);
+                }
+            }
+        };
+
+        checkHealth();
+        timer = setInterval(checkHealth, 15000);
+
+        return () => {
+            isCancelled = true;
+            if (timer) clearInterval(timer);
+        };
+    }, [isOffline]);
+
     // Auto trigger sync when the system transitions to online
     useEffect(() => {
         if (!isOffline && navigator.onLine) {
@@ -1463,6 +1624,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             hasMoreProducts,
             totalProducts,
             loadMoreProducts,
+            deductLocalProductStock,
+            registerLocalClient,
             view,
             setView,
             exchangeRate,
@@ -1470,6 +1633,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             fetchExchangeRate,
             roundBs,
             isOffline,
+            networkLatency,
+            networkQuality,
+            pendingSalesCount,
+            pendingActionsCount,
+            isOfflineModalOpen,
+            setIsOfflineModalOpen,
             receiptTemplate,
             updateReceiptTemplate,
             fetchReceiptTemplate,
@@ -1521,3 +1690,5 @@ export const useAppContext = () => {
     if (!ctx) throw new Error("AppContext must be used within an AppProvider.");
     return ctx;
 };
+
+export const useApp = useAppContext;

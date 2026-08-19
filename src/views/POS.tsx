@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
+import OfflineStatusHUD from '../components/OfflineStatusHUD';
 import { saveOfflineSale, saveOfflineAction } from '../utils/offlineStorage';
 import { useElasticScroll } from '../utils/touchScroll';
 import { safeDispatchEvent } from '../utils/events';
@@ -126,7 +127,8 @@ export default function POS() {
         clientName, setClientName, clientPhone, setClientPhone,
         discount, setDiscount, discountType, setDiscountType,
         paymentMethod, setPaymentMethod, departments, fetchDepartments,
-        hasMoreProducts, loadMoreProducts
+        hasMoreProducts, loadMoreProducts,
+        deductLocalProductStock, registerLocalClient
     } = useAppContext();
 
     const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
@@ -1427,6 +1429,21 @@ export default function POS() {
                     const offlineSale = await saveOfflineSale(salePayload, clientName, clientPhone);
                     const placeholderSaleId = offlineSale.id;
                     
+                    // Immediate local stock deduction
+                    deductLocalProductStock(cart.filter(item => item.cartQuantity > 0).map(item => ({
+                        product_id: item.id,
+                        quantity: item.cartQuantity
+                    })));
+
+                    // Immediate local client registration
+                    if (clientName.trim()) {
+                        registerLocalClient({
+                            id: clientId || -Date.now(),
+                            name: clientName.trim(),
+                            phone: clientPhone ? clientPhone.trim() : ''
+                        });
+                    }
+
                     generateTicketPDF(methodToUse, placeholderSaleId, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, creditDestination, checkoutDescription);
                     
                     setReceiptConfirmation({
@@ -1461,7 +1478,7 @@ export default function POS() {
                     setPaymentMethod('Efectivo');
                     setIsCheckoutOpen(false);
                     triggerVibrate([80, 50, 80]);
-                    showNotification("⚠️ Modo offline activo: Venta guardada localmente en IndexedDB. Se sincronizará automáticamente al recuperar la conexión.", "success");
+                    showNotification("✓ Venta completada sin conexión. Stock actualizado localmente y ticket emitido.", "success");
                 } catch (saveErr) {
                     triggerVibrate([150, 100, 150]);
                     console.error("Failed to save offline sale:", saveErr);
@@ -2621,8 +2638,11 @@ export default function POS() {
                             </button>
                         </div>
                         
-                        {/* Actions Row: Ver Última Venta & Live Exchange Rate */}
+                        {/* Actions Row: Offline Status, Ver Última Venta & Live Exchange Rate */}
                         <div className="flex items-center justify-between md:justify-end gap-2 shrink-0">
+                            {/* Intelligent Offline HUD */}
+                            <OfflineStatusHUD variant="compact" />
+
                             {/* Botón Ver Última Venta */}
                             <motion.button
                                 whileHover={{ scale: 1.02 }}

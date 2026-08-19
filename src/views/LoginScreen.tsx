@@ -5,6 +5,8 @@ import {
     RefreshCw, UserCheck, KeySquare, Store
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { validateVersionOnLogin, CLIENT_VERSION } from '../utils/versionCheck';
+import { hardRefreshApp } from '../utils/appRefresh';
 
 export default function LoginScreen() {
     const { setUser } = useAppContext();
@@ -48,6 +50,21 @@ export default function LoginScreen() {
                 if (data.token) {
                     localStorage.setItem('auth_token', data.token);
                 }
+
+                // Check version reported by server upon login against current CLIENT_VERSION
+                const versionCheck = await validateVersionOnLogin(data, {
+                    clientVersionOverride: CLIENT_VERSION,
+                    onVersionMismatch: (result) => {
+                        console.warn(`[Login] Client is outdated: local v${result.clientVersion} vs server v${result.serverVersion}`);
+                    }
+                });
+
+                if (versionCheck.isOutdated) {
+                    setError(`Nueva versión disponible (v${versionCheck.serverVersion}). Actualizando terminal para garantizar la sincronización...`);
+                    await hardRefreshApp();
+                    return;
+                }
+
                 setUser(data.user);
             } else if (data && data.error) {
                 setError(data.error);

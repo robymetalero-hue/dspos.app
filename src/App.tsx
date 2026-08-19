@@ -6,13 +6,16 @@ import { hasPermission, isMainAdmin, isAdminUser } from './utils/permissions';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { startAutoBackupScheduler } from "./utils/driveBackupScheduler";
 import { hardRefreshApp } from "./utils/appRefresh";
+import { CLIENT_VERSION, compareClientWithServerVersion, validateVersionOnLogin } from "./utils/versionCheck";
+export { CLIENT_VERSION };
 import PhysicalCountManager from './components/PhysicalCountManager';
 import AudioVoice from './components/AudioVoice';
 import OfflineStatusHUD from './components/OfflineStatusHUD';
 import OfflineManagerModal from './components/OfflineManagerModal';
+import PWAInstallModal from './components/PWAInstallModal';
 import { Menu, X, Home, ShoppingCart, Clock, Receipt, PackageSearch, 
     Folder, ClipboardCheck, Undo2, LayoutDashboard, TrendingUp, 
-    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu
+    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw, Check, Zap
 } from 'lucide-react';
 
 const lazyWithRetries = (componentImport: () => Promise<any>) =>
@@ -267,7 +270,8 @@ function AppLayout() {
         darkMode, setDarkMode, user, setUser, view, setView, isOffline, isSyncing, triggerOnlineSync,
         isAutonomousTesting, setIsAutonomousTesting, autonomousStep, setAutonomousStep, autonomousLogs, setAutonomousLogs,
         products, pwaPrompt, installPWA, isPwaInstalled, isInitializing, kioskMode, theme, setTheme, syncError,
-        isOfflineModalOpen, setIsOfflineModalOpen
+        isOfflineModalOpen, setIsOfflineModalOpen, isPwaInstallModalOpen, setIsPwaInstallModalOpen,
+        hasPwaUpdate, isUpdatingPwa, pwaUpdateStepMessage, pwaVersionInfo, checkForPwaUpdates, applyPwaUpdate, handlePwaPrimaryAction
     } = useAppContext();
     
     const isRgb = theme === 'rgb';
@@ -364,7 +368,6 @@ function AppLayout() {
     }, [showDevicesModal]);
 
     // App live update push settings - blocks obsolete clients and clears cache aggressively
-    const CLIENT_VERSION = "2.4.0";
     const [updateAvailable, setUpdateAvailable] = useState(false);
     const [showUpdateWarning, setShowUpdateWarning] = useState(false);
     const [serverVersion, setServerVersion] = useState("");
@@ -376,9 +379,10 @@ function AppLayout() {
             const res = await fetch(`/api/app-version?_t=${Date.now()}`);
             if (res.ok) {
                 const data = await res.json();
-                if (data.version && data.version !== CLIENT_VERSION) {
+                const comparison = compareClientWithServerVersion(data.version, CLIENT_VERSION);
+                if (comparison.isOutdated) {
                     setUpdateAvailable(true);
-                    setServerVersion(data.version);
+                    setServerVersion(comparison.serverVersion);
                     setReleaseNotes(data.release_notes || "");
                     setShowUpdateWarning(true);
                     await hardRefreshApp();
@@ -397,12 +401,15 @@ function AppLayout() {
     useEffect(() => {
         const handlePushUpdate = async (e: any) => {
             const data = e.detail;
-            if (data && data.version && data.version !== CLIENT_VERSION) {
-                setUpdateAvailable(true);
-                setServerVersion(data.version);
-                setReleaseNotes(data.release_notes || "");
-                setShowUpdateWarning(true);
-                await hardRefreshApp();
+            if (data && data.version) {
+                const comparison = compareClientWithServerVersion(data.version, CLIENT_VERSION);
+                if (comparison.isOutdated) {
+                    setUpdateAvailable(true);
+                    setServerVersion(comparison.serverVersion);
+                    setReleaseNotes(data.release_notes || "");
+                    setShowUpdateWarning(true);
+                    await hardRefreshApp();
+                }
             }
         };
         window.addEventListener('app-update-pushed', handlePushUpdate);
@@ -676,6 +683,45 @@ function AppLayout() {
                     </button>
                 )}
 
+                {/* Single Smart Adaptive PWA Button (Install / Update / Status) */}
+                {hasPwaUpdate ? (
+                    <button
+                        onClick={handlePwaPrimaryAction}
+                        disabled={isUpdatingPwa}
+                        className="w-full mt-2.5 py-2 px-2.5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-600 hover:to-rose-600 text-white border border-amber-400/40 rounded-xl text-[9.5px] font-black uppercase transition flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-amber-500/20 animate-pulse overflow-hidden"
+                        title="Nueva actualización detectada. Haz clic para actualizar a la última versión."
+                    >
+                        {isUpdatingPwa ? (
+                            <div className="flex items-center gap-1.5 max-w-full">
+                                <RefreshCw size={11} className="animate-spin shrink-0" />
+                                <span className="truncate tracking-tight font-mono">{pwaUpdateStepMessage || 'Limpiando caché...'}</span>
+                            </div>
+                        ) : (
+                            <>
+                                <Zap size={11} className="text-yellow-200 animate-bounce shrink-0" />
+                                <span className="truncate">Actualizar App (v{pwaVersionInfo.latestVersion})</span>
+                            </>
+                        )}
+                    </button>
+                ) : !isPwaInstalled ? (
+                    <button
+                        onClick={handlePwaPrimaryAction}
+                        className="w-full mt-2.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white border border-emerald-500/20 rounded-xl text-[9.5px] font-extrabold uppercase transition flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                        <Download size={11} className="animate-bounce" />
+                        <span>Instalar App en PC / Celular</span>
+                    </button>
+                ) : (
+                    <button
+                        onClick={handlePwaPrimaryAction}
+                        className="w-full mt-2.5 py-1.5 bg-slate-100 dark:bg-slate-850/70 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-800 rounded-xl text-[9px] font-bold uppercase transition flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="App instalada y al día. Clic para verificar si hay nuevas actualizaciones."
+                    >
+                        <Check size={10} className="text-emerald-500" />
+                        <span>GTR POS v{pwaVersionInfo.currentVersion} al Día</span>
+                    </button>
+                )}
+
                 {/* Visual Status Indicator Footer */}
                 <div className="flex justify-between items-center border-t border-slate-100 dark:border-slate-800/40 pt-2 text-[10px] text-[#94a3b8] font-bold">
                     <span>Sistema Autorizado</span>
@@ -785,6 +831,25 @@ function AppLayout() {
 
             {/* User credentials log info and safe exit */}
             <div className="p-3.5 border-t border-slate-100 dark:border-slate-850/60 bg-slate-50/50 dark:bg-black/15">
+                {hasPwaUpdate && (
+                    <button
+                        onClick={handlePwaPrimaryAction}
+                        disabled={isUpdatingPwa}
+                        className="w-full mb-3 py-2 px-2.5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-600 hover:to-rose-600 text-white border border-amber-400/40 rounded-xl text-[9.5px] font-black uppercase transition flex items-center justify-center gap-1.5 cursor-pointer shadow-md animate-pulse overflow-hidden"
+                    >
+                        {isUpdatingPwa ? (
+                            <div className="flex items-center gap-1.5 max-w-full">
+                                <RefreshCw size={11} className="animate-spin shrink-0" />
+                                <span className="truncate tracking-tight font-mono">{pwaUpdateStepMessage || 'Limpiando caché...'}</span>
+                            </div>
+                        ) : (
+                            <>
+                                <Zap size={11} className="text-yellow-200 animate-bounce shrink-0" />
+                                <span className="truncate">Actualizar a v{pwaVersionInfo.latestVersion}</span>
+                            </>
+                        )}
+                    </button>
+                )}
                 <div className="flex items-center gap-3 p-2 bg-white dark:bg-[#0c111e]/50 border border-slate-200/50 dark:border-slate-850/40 rounded-2xl shadow-xs">
                     <div className="w-9 h-9 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center font-bold text-sm uppercase">
                         {user?.username ? user.username.slice(0, 2) : 'OP'}
@@ -1457,6 +1522,12 @@ function AppLayout() {
             <OfflineManagerModal 
                 isOpen={isOfflineModalOpen} 
                 onClose={() => setIsOfflineModalOpen(false)} 
+            />
+
+            {/* PWA Direct Installation & Standalone Launcher Modal */}
+            <PWAInstallModal
+                isOpen={isPwaInstallModalOpen}
+                onClose={() => setIsPwaInstallModalOpen(false)}
             />
         </div>
     );

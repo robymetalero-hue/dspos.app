@@ -43,8 +43,8 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
   
-  // Exclude internal transactional backend APIs and live sync connections
-  if (url.pathname.startsWith('/api') || url.pathname.includes('socket')) {
+  // Exclude internal transactional backend APIs, live sync connections, and version manifest
+  if (url.pathname.startsWith('/api') || url.pathname.includes('socket') || url.pathname.endsWith('/version.json')) {
     return;
   }
 
@@ -117,3 +117,19 @@ self.addEventListener('fetch', (event) => {
       })
   );
 });
+
+// Direct control messages from app client
+self.addEventListener('message', (event) => {
+  if (!event.data) return;
+  
+  if (event.data === 'SKIP_WAITING' || event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+  
+  if (event.data === 'CLEAR_CACHES' || event.data.type === 'CLEAR_CACHES') {
+    caches.keys().then((keys) => {
+      return Promise.all(keys.map((key) => caches.delete(key)));
+    });
+  }
+});
+

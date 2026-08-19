@@ -16,7 +16,12 @@ interface AuditLog {
 }
 
 export default function ConfiguracionesView() {
-    const { exchangeRate, setExchangeRate, fetchExchangeRate, user, showNotification, receiptTemplate, updateReceiptTemplate, clients, fetchClients, theme, setTheme, rgbSettings, setRgbSettings, pwaPrompt, installPWA, isPwaInstalled, kioskMode, setKioskMode } = useAppContext();
+    const { 
+        exchangeRate, setExchangeRate, fetchExchangeRate, user, showNotification, receiptTemplate, 
+        updateReceiptTemplate, clients, fetchClients, theme, setTheme, rgbSettings, setRgbSettings, 
+        pwaPrompt, installPWA, isPwaInstalled, kioskMode, setKioskMode,
+        hasPwaUpdate, isUpdatingPwa, pwaUpdateStepMessage, pwaVersionInfo, handlePwaPrimaryAction, checkForPwaUpdates, applyPwaUpdate
+    } = useAppContext();
     const [rateInput, setRateInput] = useState<string>("");
     const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -1942,27 +1947,76 @@ export default function ConfiguracionesView() {
                         <div className="md:col-span-4 flex justify-end">
                             <button
                                 type="button"
-                                onClick={installPWA}
-                                className="w-full md:w-auto px-6 py-3.5 bg-gradient-to-r from-indigo-600 via-indigo-700 to-blue-700 hover:from-indigo-700 hover:to-blue-800 text-white text-xs font-black rounded-2xl shadow-lg shadow-indigo-505/15 border border-indigo-505/20 flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider transition group hover:scale-[1.02] active:scale-[0.98]"
+                                onClick={handlePwaPrimaryAction}
+                                disabled={isUpdatingPwa}
+                                className={`w-full md:w-auto px-6 py-3.5 text-white text-xs font-black rounded-2xl shadow-lg border flex items-center justify-center gap-2 cursor-pointer uppercase tracking-wider transition group hover:scale-[1.02] active:scale-[0.98] ${
+                                    hasPwaUpdate 
+                                        ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 border-amber-400/40 shadow-amber-500/20 animate-pulse'
+                                        : 'bg-gradient-to-r from-indigo-600 via-indigo-700 to-blue-700 hover:from-indigo-700 hover:to-blue-800 border-indigo-505/20 shadow-indigo-505/15'
+                                }`}
                             >
-                                <Sparkles size={13} className="text-amber-300 animate-pulse" />
-                                <span>{pwaPrompt ? 'Instalar GTR POS' : '¿Cómo Instalar?'}</span>
+                                {isUpdatingPwa ? (
+                                    <>
+                                        <RefreshCw size={13} className="animate-spin shrink-0" />
+                                        <span className="font-mono text-[11px]">{pwaUpdateStepMessage || 'Limpiando caché...'}</span>
+                                    </>
+                                ) : hasPwaUpdate ? (
+                                    <>
+                                        <Sparkles size={13} className="text-yellow-200 animate-bounce" />
+                                        <span>Actualizar a v{pwaVersionInfo.latestVersion} Ahora</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Sparkles size={13} className="text-amber-300 animate-pulse" />
+                                        <span>Instalar GTR POS (App Nativa)</span>
+                                    </>
+                                )}
                             </button>
                         </div>
                     </div>
                 </div>
             ) : (
-                <div className="bg-emerald-500/10 dark:bg-[#091b16] border border-emerald-550/20 dark:border-emerald-950 rounded-3xl p-6 flex flex-col gap-4 animate-in fade-in duration-300">
+                <div className="bg-emerald-500/10 dark:bg-[#091b16] border border-emerald-550/20 dark:border-emerald-950 rounded-3xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 animate-in fade-in duration-300">
                     <div className="flex items-center gap-3 text-emerald-600 dark:text-emerald-400">
                         <div className="p-2 bg-emerald-500/10 rounded-xl shrink-0">
                             <Smartphone size={18} />
                         </div>
                         <div>
                             <h2 className="text-sm font-extrabold uppercase tracking-wider flex items-center gap-2">
-                                ¡GTR POS está instalado como PWA! <span className="text-[9px] font-black uppercase bg-emerald-555/15 text-emerald-600 px-1.5 py-0.5 rounded-lg">Instalado</span>
+                                ¡GTR POS está instalado como PWA! <span className="text-[9px] font-black uppercase bg-emerald-555/15 text-emerald-600 px-1.5 py-0.5 rounded-lg">v{pwaVersionInfo.currentVersion}</span>
                             </h2>
                             <p className="text-[10.5px] font-semibold opacity-85 mt-0.5">La aplicación se está ejecutando de forma nativa e independiente en este dispositivo con soporte offline completo.</p>
                         </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={handlePwaPrimaryAction}
+                            disabled={isUpdatingPwa}
+                            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-sm ${
+                                hasPwaUpdate
+                                    ? 'bg-gradient-to-r from-amber-500 to-rose-500 text-white border border-amber-400/40 animate-pulse'
+                                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+                            }`}
+                        >
+                            {isUpdatingPwa ? (
+                                <>
+                                    <RefreshCw size={13} className="animate-spin shrink-0" />
+                                    <span className="font-mono text-[11px]">{pwaUpdateStepMessage || 'Limpiando caché...'}</span>
+                                </>
+                            ) : hasPwaUpdate ? (
+                                <>
+                                    <Sparkles size={13} className="text-yellow-200" />
+                                    <span>{`Actualizar a v${pwaVersionInfo.latestVersion}`}</span>
+                                </>
+                            ) : (
+                                <>
+                                    <RefreshCw size={13} className="text-emerald-500" />
+                                    <span>Buscar Actualizaciones</span>
+                                </>
+                            )}
+                        </button>
                     </div>
                 </div>
             )}

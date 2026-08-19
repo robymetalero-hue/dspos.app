@@ -184,11 +184,21 @@ interface AppContextType {
     apiPingResults: any;
     setApiPingResults: (results: any) => void;
 
-    // PWA Install Properties
+    // PWA Install & Bulletproof Update Properties
     pwaPrompt: any;
     setPwaPrompt: (prompt: any) => void;
     installPWA: () => Promise<void>;
     isPwaInstalled: boolean;
+    setIsPwaInstalled: (b: boolean) => void;
+    isPwaInstallModalOpen: boolean;
+    setIsPwaInstallModalOpen: (b: boolean) => void;
+    hasPwaUpdate: boolean;
+    isUpdatingPwa: boolean;
+    pwaUpdateStepMessage: string;
+    pwaVersionInfo: { currentVersion: string; latestVersion: string; buildTime: number };
+    checkForPwaUpdates: () => Promise<boolean>;
+    applyPwaUpdate: () => Promise<void>;
+    handlePwaPrimaryAction: () => Promise<void>;
     showNotification?: (message: string, type?: 'success' | 'error' | 'warn' | 'info') => void;
 }
 
@@ -208,13 +218,149 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [pendingActionsCount, setPendingActionsCount] = useState<number>(0);
     const [isOfflineModalOpen, setIsOfflineModalOpen] = useState<boolean>(false);
 
-    // PWA states
+    // PWA & Bulletproof Update Lifecycle States
     const [pwaPrompt, setPwaPrompt] = useState<any>(null);
+    const [isPwaInstallModalOpen, setIsPwaInstallModalOpen] = useState<boolean>(false);
     const [isPwaInstalled, setIsPwaInstalled] = useState<boolean>(() => {
         const standalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true;
         const localFlag = localStorage.getItem('pwa_installed') === 'true';
         return standalone || localFlag;
     });
+    const [hasPwaUpdate, setHasPwaUpdate] = useState<boolean>(false);
+    const [isUpdatingPwa, setIsUpdatingPwa] = useState<boolean>(false);
+    const [pwaUpdateStepMessage, setPwaUpdateStepMessage] = useState<string>('Iniciando...');
+    const [pwaVersionInfo, setPwaVersionInfo] = useState<{ currentVersion: string; latestVersion: string; buildTime: number }>(() => {
+        const storedBuild = localStorage.getItem('pwa_build_timestamp');
+        return {
+            currentVersion: localStorage.getItem('pwa_app_version') || '2.4.0',
+            latestVersion: '2.4.0',
+            buildTime: storedBuild ? parseInt(storedBuild, 10) : 1771465200000
+        };
+    });
+
+    // Check for updates against both the Service Worker and the version.json manifest
+    const checkForPwaUpdates = async (): Promise<boolean> => {
+        let updateFound = false;
+        try {
+            // 1. Service Worker update check
+            if ('serviceWorker' in navigator && (window as any).__pwaServiceWorkerReg) {
+                const reg = (window as any).__pwaServiceWorkerReg;
+                await reg.update().catch(() => {});
+                if (reg.waiting) {
+                    setHasPwaUpdate(true);
+                    updateFound = true;
+                }
+            }
+
+            // 2. HTTP Version and API manifest ping
+            if (navigator.onLine) {
+                // Check static version.json
+                const res = await fetch(`/version.json?t=${Date.now()}`, {
+                    cache: 'no-store',
+                    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+                }).catch(() => null);
+
+                if (res && res.ok) {
+                    const data = await res.json().catch(() => null);
+                    if (data && data.buildTime) {
+                        const localBuild = pwaVersionInfo.buildTime;
+                        if (data.buildTime > localBuild || (data.version && data.version !== pwaVersionInfo.currentVersion)) {
+                            setPwaVersionInfo(prev => ({
+                                ...prev,
+                                latestVersion: data.version || '2.4.0',
+                                buildTime: data.buildTime
+                            }));
+                            setHasPwaUpdate(true);
+                            updateFound = true;
+                        }
+                    }
+                }
+
+                // Also check /api/app-version endpoint
+                const apiRes = await fetch(`/api/app-version?t=${Date.now()}`).catch(() => null);
+                if (apiRes && apiRes.ok) {
+                    const apiData = await apiRes.json().catch(() => null);
+                    if (apiData && apiData.version && apiData.version !== pwaVersionInfo.currentVersion) {
+                        setPwaVersionInfo(prev => ({
+                            ...prev,
+                            latestVersion: apiData.version
+                        }));
+                        setHasPwaUpdate(true);
+                        updateFound = true;
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('[PWA] Update check bypassed (offline/unreachable):', err);
+        }
+        return updateFound;
+    };
+
+    // Apply PWA update cleanly, purging old assets while preserving IndexedDB / business data
+    const applyPwaUpdate = async () => {
+        setIsUpdatingPwa(true);
+        setPwaUpdateStepMessage('Iniciando actualización...');
+        if (showNotification) {
+            showNotification('Aplicando actualización a la última versión...', 'info');
+        }
+
+        try {
+            const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+            await delay(250);
+            setPwaUpdateStepMessage('Limpiando caché...');
+            if (window.caches) {
+                const keys = await window.caches.keys();
+                await Promise.all(keys.map(k => window.caches.delete(k)));
+            }
+
+            await delay(300);
+            setPwaUpdateStepMessage('Desregistrando Service Worker...');
+            if ('serviceWorker' in navigator) {
+                const reg = (window as any).__pwaServiceWorkerReg || await navigator.serviceWorker.getRegistration();
+                if (reg && reg.waiting) {
+                    reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                    reg.waiting.postMessage('SKIP_WAITING');
+                }
+            }
+
+            await delay(300);
+            setPwaUpdateStepMessage(`Registrando nueva versión v${pwaVersionInfo.latestVersion}...`);
+            localStorage.setItem('pwa_app_version', pwaVersionInfo.latestVersion);
+            localStorage.setItem('pwa_build_timestamp', String(pwaVersionInfo.buildTime));
+
+            await delay(350);
+            setPwaUpdateStepMessage('Reiniciando terminal...');
+            await delay(250);
+
+            window.location.reload();
+        } catch (e) {
+            console.error('[PWA] Error applying update:', e);
+            setPwaUpdateStepMessage('Recargando terminal...');
+            window.location.reload();
+        }
+    };
+
+    // Unified single button action handler (No new buttons added to screens)
+    const handlePwaPrimaryAction = async () => {
+        if (hasPwaUpdate) {
+            // If there's an update, this button forces the update directly
+            await applyPwaUpdate();
+        } else if (!isPwaInstalled) {
+            // If not installed, this button triggers install / installation modal
+            await installPWA();
+        } else {
+            // If already installed and up to date, check for new updates
+            const found = await checkForPwaUpdates();
+            if (!found) {
+                if (showNotification) {
+                    showNotification('GTR POS está al día con la última versión disponible.', 'success');
+                } else {
+                    setIsPwaInstallModalOpen(true);
+                }
+            }
+        }
+    };
 
     useEffect(() => {
         const handleBeforeInstall = (e: any) => {
@@ -230,24 +376,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
         window.addEventListener('appinstalled', handleAppInstalled);
 
+        // Listen for PWA update available events
+        const handleUpdateAvailable = () => {
+            console.log('[PWA] Evento pwa-update-available recibido. Activando botón de actualización.');
+            setHasPwaUpdate(true);
+        };
+        window.addEventListener('pwa-update-available', handleUpdateAvailable);
+
+        // Automatic update checker on window focus and periodic interval
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible' && navigator.onLine) {
+                checkForPwaUpdates();
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        // Periodic background check every 3 minutes
+        const updateInterval = setInterval(() => {
+            if (navigator.onLine) {
+                checkForPwaUpdates();
+            }
+        }, 180000);
+
+        // Initial check
+        checkForPwaUpdates();
+
         return () => {
             window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
             window.removeEventListener('appinstalled', handleAppInstalled);
+            window.removeEventListener('pwa-update-available', handleUpdateAvailable);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            clearInterval(updateInterval);
         };
     }, []);
 
     const installPWA = async () => {
         if (pwaPrompt) {
-            pwaPrompt.prompt();
-            const { outcome } = await pwaPrompt.userChoice;
-            if (outcome === 'accepted') {
-                setPwaPrompt(null);
-                setIsPwaInstalled(true);
-                localStorage.setItem('pwa_installed', 'true');
+            try {
+                pwaPrompt.prompt();
+                const { outcome } = await pwaPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    setPwaPrompt(null);
+                    setIsPwaInstalled(true);
+                    localStorage.setItem('pwa_installed', 'true');
+                    return;
+                }
+            } catch (e) {
+                console.error("Error during pwaPrompt.prompt():", e);
             }
-        } else {
-            alert("¡GTR POS ya está optimizado como PWA instalable!\n\nPara instalar:\n1. En PC: haz clic en el icono de instalación (pantalla con flecha hacia abajo) a la derecha en la barra de direcciones de tu navegador.\n2. En iPhone (Safari): pulsa el botón 'Compartir' y selecciona 'Añadir a pantalla de inicio'.\n3. En Android (Chrome): pulsa los 3 puntos superiores y selecciona 'Instalar aplicación' o 'Añadir a pantalla de inicio'.");
         }
+        // Always open the dedicated PWA modal for complete guidance and alternative options
+        setIsPwaInstallModalOpen(true);
     };
 
     // S.I.T.A. Autonomous active variables
@@ -1678,6 +1857,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setPwaPrompt,
             installPWA,
             isPwaInstalled,
+            setIsPwaInstalled,
+            isPwaInstallModalOpen,
+            setIsPwaInstallModalOpen,
+            hasPwaUpdate,
+            isUpdatingPwa,
+            pwaUpdateStepMessage,
+            pwaVersionInfo,
+            checkForPwaUpdates,
+            applyPwaUpdate,
+            handlePwaPrimaryAction,
             showNotification
         }}>
             {children}

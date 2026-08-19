@@ -169,6 +169,38 @@ window.addEventListener('unhandledrejection', async (event) => {
   }
 });
 
+// Service Worker Registration for PWA Standalone & Offline Execution
+if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((reg) => {
+        (window as any).__pwaServiceWorkerReg = reg;
+        console.log('[PWA] Service Worker registrado exitosamente con scope:', reg.scope);
+        
+        // If there is already a waiting worker on load
+        if (reg.waiting && navigator.serviceWorker.controller) {
+          window.dispatchEvent(new CustomEvent('pwa-update-available', { detail: { registration: reg } }));
+        }
+
+        // Check for updates on install
+        reg.addEventListener('updatefound', () => {
+          const installingWorker = reg.installing;
+          if (installingWorker) {
+            installingWorker.addEventListener('statechange', () => {
+              if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[PWA] Nueva versión detectada y lista para aplicar.');
+                window.dispatchEvent(new CustomEvent('pwa-update-available', { detail: { registration: reg } }));
+              }
+            });
+          }
+        });
+      })
+      .catch((err) => {
+        console.warn('[PWA] Error al registrar Service Worker:', err);
+      });
+  });
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

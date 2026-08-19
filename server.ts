@@ -511,7 +511,16 @@ async function startServer() {
           status: 'success'
         });
 
-        res.json({ token, user: { id: user.id, username: user.username, role: user.role, permissions, email: user.email } });
+        const versionRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_version") as any;
+        const currentServerVersion = versionRow ? versionRow.value : "2.4.0";
+
+        res.json({ 
+          token, 
+          user: { id: user.id, username: user.username, role: user.role, permissions, email: user.email },
+          app_version: currentServerVersion,
+          server_version: currentServerVersion,
+          version: currentServerVersion
+        });
       } else {
         // Audit failed login
         insertSystemAuditLog({
@@ -547,7 +556,18 @@ async function startServer() {
       }
       if (user) {
         const permissions = JSON.parse(user.permissions || "{}");
-        res.json({ id: user.id, username: user.username, role: user.role, permissions, email: user.email });
+        const versionRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_version") as any;
+        const currentServerVersion = versionRow ? versionRow.value : "2.4.0";
+        res.json({ 
+          id: user.id, 
+          username: user.username, 
+          role: user.role, 
+          permissions, 
+          email: user.email,
+          app_version: currentServerVersion,
+          server_version: currentServerVersion,
+          version: currentServerVersion
+        });
       } else {
         res.status(404).json({ error: "Usuario no encontrado" });
       }

@@ -224,6 +224,18 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
     setIsLoading(true);
     try {
+      const payload = {
+        user_id: user?.id || 1,
+        username: user?.username || 'admin',
+        auditor_name: auditorName.trim(),
+        store_name: storeName.trim(),
+        notes: sessionNotes || `Control Físico de Almacén${isBlindMode ? ' a Ciegas' : ''}`,
+        category_filter: selectedCategory === 'Todos' ? null : selectedCategory,
+        mode: isBlindMode ? 'BLIND' : 'STANDARD',
+        override_segregation: overrideSegregation ? 1 : 0,
+        override_reason: overrideSegregation ? overrideReason : null
+      };
+
       const res = await fetch('/api/inventory-counts', {
         method: 'POST',
         headers: {
@@ -231,17 +243,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
           'x-user-id': String(user?.id || 1),
           'x-user-role': user?.role || ''
         },
-        body: JSON.stringify({
-          user_id: user?.id || 1,
-          username: user?.username || 'admin',
-          auditor_name: auditorName.trim(),
-          store_name: storeName.trim(),
-          notes: sessionNotes || `Control Físico de Almacén${isBlindMode ? ' a Ciegas' : ''}`,
-          category_filter: selectedCategory === 'Todos' ? null : selectedCategory,
-          mode: isBlindMode ? 'BLIND' : 'STANDARD',
-          override_segregation: overrideSegregation ? 1 : 0,
-          override_reason: overrideSegregation ? overrideReason : null
-        })
+        body: JSON.stringify(payload)
       });
 
       const responseData = await res.json();
@@ -250,6 +252,29 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         showNotification?.(`✓ Nueva sesión de auditoría física${isBlindMode ? ' a ciegas' : ''} iniciada con éxito.`, "success");
         await fetchProducts();
         await fetchActiveSession();
+      } else if (responseData.has_active_session) {
+        const replace = confirm(`${responseData.error}\n\n¿Deseas cancelar la sesión anterior e iniciar esta nueva auditoría de inventario?`);
+        if (replace) {
+          const retryRes = await fetch('/api/inventory-counts', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': String(user?.id || 1),
+              'x-user-role': user?.role || ''
+            },
+            body: JSON.stringify({ ...payload, force_new: true })
+          });
+          if (retryRes.ok) {
+            showNotification?.(`✓ Nueva sesión de auditoría iniciada con éxito.`, "success");
+            await fetchProducts();
+            await fetchActiveSession();
+          } else {
+            const errData = await retryRes.json();
+            showNotification?.(errData.error || "No se pudo iniciar la sesión.", "error");
+          }
+        } else {
+          await fetchActiveSession();
+        }
       } else if (responseData.segregation_warning) {
         setSegregationWarning(responseData.error);
         showNotification?.(responseData.error, "warning");
@@ -438,13 +463,18 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     try {
       const res = await fetch(`/api/inventory-counts/${activeSession.id}/status`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-role': user?.role || ''
+        },
         body: JSON.stringify({ status: 'cancelado' })
       });
       if (res.ok) {
         showNotification?.("Sesión de auditoría cancelada.", "info");
         setActiveSession(null);
         setSessionItems([]);
+        await fetchActiveSession();
+        await fetchHistory();
       }
     } catch (err) {
       console.error(err);

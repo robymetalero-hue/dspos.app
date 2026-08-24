@@ -5683,7 +5683,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     try {
       const userRole = req.headers['x-user-role'] || req.query.user_role;
       const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe';
-      let counts = db.prepare('SELECT * FROM inventory_counts ORDER BY started_at DESC').all() as any[];
+      let counts = db.prepare('SELECT * FROM inventory_counts ORDER BY id DESC').all() as any[];
 
       if (!isAdmin) {
         counts = counts.map(c => {
@@ -5709,16 +5709,25 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       category_filter, 
       mode, 
       override_segregation, 
-      override_reason 
+      override_reason,
+      force_new
     } = req.body;
 
     try {
       const userRole = req.headers['x-user-role'] || req.body.user_role || '';
       const isAdmin = userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || userRole === 'dueño' || userRole === 'jefe' || username === 'admin';
 
-      const activeSession = db.prepare("SELECT id FROM inventory_counts WHERE status IN ('en_progreso', 'pausado')").get() as any;
-      if (activeSession) {
-        return res.status(400).json({ error: `Ya existe una sesión de conteo activa (#${activeSession.id}). Por favor, finalízala o paúsala antes de iniciar otra.` });
+      if (force_new) {
+        db.prepare("UPDATE inventory_counts SET status = 'cancelado', notes = 'Cancelada automáticamente al iniciar nueva auditoría' WHERE status IN ('en_progreso', 'pausado')").run();
+      } else {
+        const activeSession = db.prepare("SELECT id FROM inventory_counts WHERE status IN ('en_progreso', 'pausado') ORDER BY id DESC").get() as any;
+        if (activeSession) {
+          return res.status(400).json({ 
+            has_active_session: true,
+            active_id: activeSession.id,
+            error: `Ya existe una sesión de conteo activa (#${activeSession.id}). Por favor, finalízala o paúsala antes de iniciar otra.` 
+          });
+        }
       }
 
       const assignedAuditor = (auditor_name || username || 'Auditor').trim();
@@ -5875,7 +5884,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           p.name as live_product_name,
           p.sku as live_product_sku,
           p.category as live_category,
-          p.price_sale,
+          p.price_unit as price_sale,
           p.price_cost
         FROM inventory_count_items ici
         LEFT JOIN products p ON p.id = ici.product_id

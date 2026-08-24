@@ -1,13 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { safeDispatchEvent } from '../utils/events';
 import { hasPermission } from '../utils/permissions';
 import { 
-  ClipboardCheck, Clock, CheckCircle, AlertTriangle, Play, X, Trash2, 
-  Save, Eye, RefreshCw, Sparkles, Filter, Search, Check, Ban, ChevronDown, ChevronUp, 
-  AlertOctagon, Undo, ChevronRight, ShieldCheck, ShieldAlert, UserCheck, CheckSquare, 
-  Square, FileText, ArrowRight, Layers, SlidersHorizontal, BarChart3, AlertCircle, 
-  CheckCheck, ListFilter, ArrowUpDown, ChevronLeft, Zap
+  ClipboardCheck, CheckCircle, AlertTriangle, Play, X, 
+  Eye, RefreshCw, Search, Check, ChevronLeft, 
+  ShieldCheck, FileText, Zap, History, ListCheck, CheckCheck
 } from 'lucide-react';
 
 interface PhysicalCountManagerProps {
@@ -59,13 +57,15 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const isAdmin = user?.role === 'admin' || user?.role === 'propietario' || user?.role === 'administrador' || user?.role === 'dueño' || user?.role === 'jefe';
   const canPreviewQuantities = isAdmin || hasPermission(user, 'preview_quantities_in_count');
 
-  // Bloqueo de scroll de fondo si no está embebido
+  // Bloqueo estricto del scroll del body mientras el modal esté abierto
   useEffect(() => {
     if (!embeddedMode) {
       const prevOverflow = document.body.style.overflow;
+      const prevPosition = document.body.style.position;
       document.body.style.overflow = 'hidden';
       return () => {
         document.body.style.overflow = prevOverflow;
+        document.body.style.position = prevPosition;
       };
     }
   }, [embeddedMode]);
@@ -93,9 +93,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   // Filtros del listado de conteo activo
   const [itemSearch, setItemSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<'todos' | 'pendientes' | 'revisados' | 'diferencias'>('todos');
-  const [hideRevisados, setHideRevisados] = useState(false);
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('ALL');
-  const [viewDensity, setViewDensity] = useState<'compact' | 'detailed'>('compact');
 
   // Modal / Detalle de sesión histórica
   const [selectedHistoricCount, setSelectedHistoricCount] = useState<InventoryCount | null>(null);
@@ -118,7 +116,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     }
   }, [products]);
 
-  // Validar segregación de funciones para trabajadores
+  // Validar segregación de funciones
   useEffect(() => {
     if (!isAdmin && user?.username && auditorName) {
       const isOperatorSelfAuditing = auditorName.toLowerCase().trim().includes(user.username.toLowerCase().trim()) || auditorName.toLowerCase().includes('cajero');
@@ -522,7 +520,6 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   };
 
   const activeSummary = useMemo(() => getDiscrepancySummary(sessionItems), [sessionItems]);
-  const historicSummary = useMemo(() => getDiscrepancySummary(historicItems), [historicItems]);
 
   // Lista de categorías únicas presentes en la sesión activa
   const activeSessionCategories = useMemo(() => {
@@ -550,106 +547,98 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         matchesFilter = it.is_checked === 1 && it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0);
       }
 
-      const matchesHideRevisados = !hideRevisados || it.is_checked === 0;
       const matchesCategory = selectedCategoryFilter === 'ALL' || (it.product_category && it.product_category.toLowerCase() === selectedCategoryFilter.toLowerCase());
 
-      return matchesSearch && matchesFilter && matchesHideRevisados && matchesCategory;
+      return matchesSearch && matchesFilter && matchesCategory;
     });
-  }, [sessionItems, itemSearch, activeFilter, hideRevisados, selectedCategoryFilter, activeSummary.hasAdminVisibility]);
+  }, [sessionItems, itemSearch, activeFilter, selectedCategoryFilter, activeSummary.hasAdminVisibility]);
 
   return (
     <div 
       id="physical-count-screen"
       className={embeddedMode 
         ? "w-full h-full flex flex-col overflow-hidden bg-slate-100 dark:bg-[#070b14] select-none" 
-        : "fixed inset-0 z-[999] bg-slate-900/80 backdrop-blur-sm flex flex-col md:p-3 select-none overflow-hidden"
+        : "fixed inset-0 z-[9999] w-full h-full bg-slate-900/90 backdrop-blur-md flex flex-col md:p-3 select-none overflow-hidden"
       }
     >
-      {/* CONTENEDOR PRINCIPAL: Fullscreen nativo en móviles, caja elegante en desktop */}
+      {/* CONTENEDOR PRINCIPAL: Ocupa el 100% de la pantalla en móviles sin recortes */}
       <div className={embeddedMode 
         ? "w-full h-full flex flex-col overflow-hidden" 
-        : "w-full h-full md:max-w-6xl md:mx-auto flex flex-col bg-slate-100 dark:bg-[#090e1a] md:rounded-2xl border border-slate-250 dark:border-slate-800/90 shadow-2xl overflow-hidden"
+        : "w-full h-full md:max-w-6xl md:mx-auto flex flex-col bg-slate-100 dark:bg-[#090e1a] md:rounded-2xl border-0 md:border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
       }>
         
         {/* ======================================================== */}
-        {/* 1. CABECERA ULTRA-COMPACTA OPTIMIZADA PARA SMARTPHONE      */}
+        {/* 1. CABECERA ULTRA-COMPACTA (Altura: ~44px)               */}
         {/* ======================================================== */}
-        <header className="px-3 py-2 md:px-5 md:py-2.5 bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0 gap-2 z-20 shadow-xs">
+        <header className="h-12 px-3 bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0 gap-2 z-20 shadow-xs">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             {onClose && (
               <button 
                 id="btn-close-physical-count-top"
                 type="button"
                 onClick={onClose} 
-                className="p-1.5 -ml-1 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer shrink-0"
-                title="Cerrar / Salir"
+                className="w-8 h-8 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition cursor-pointer shrink-0"
+                title="Cerrar / Pausar"
               >
                 <ChevronLeft size={22} className="stroke-[2.5]" />
               </button>
             )}
-            
-            <div className="w-8 h-8 rounded-xl bg-indigo-600/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
-              <ClipboardCheck size={18} className="stroke-[2.2]" />
-            </div>
 
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <h1 className="text-xs md:text-sm font-black text-slate-850 dark:text-white uppercase tracking-tight truncate leading-tight">
-                  Control Físico
-                </h1>
-                {activeSession && (
-                  <span className={`px-1.5 py-0.2 text-[9px] font-black uppercase rounded-md border leading-tight ${
-                    activeSession.mode === 'BLIND' 
-                      ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' 
-                      : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
-                  }`}>
-                    {activeSession.mode === 'BLIND' ? 'Ciegas' : 'Visible'}
-                  </span>
-                )}
-              </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium truncate leading-tight">
-                {activeSession 
-                  ? `Sesión #${activeSession.id} · ${activeSession.auditor_name || activeSession.username}`
-                  : 'Auditoría física de almacén y POS'}
-              </p>
+            <div className="min-w-0 flex items-center gap-1.5 truncate">
+              <h1 className="text-xs md:text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight truncate leading-tight">
+                Control Físico
+              </h1>
+              {activeSession && (
+                <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                  #{activeSession.id}
+                </span>
+              )}
+              {activeSession && (
+                <span className={`px-1.5 py-0.2 text-[9px] font-black uppercase rounded-md border shrink-0 ${
+                  activeSession.mode === 'BLIND' 
+                    ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800' 
+                    : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                }`}>
+                  {activeSession.mode === 'BLIND' ? 'Ciegas' : 'Visible'}
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Segmented Tab Switcher + Actions */}
-          <div className="flex items-center gap-1 shrink-0">
-            <div className="bg-slate-100 dark:bg-slate-800/80 p-0.5 rounded-xl flex items-center border border-slate-200/60 dark:border-slate-700/60">
-              <button
-                type="button"
-                onClick={() => { setActiveTab('activo'); setSelectedHistoricCount(null); }}
-                className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center gap-1 cursor-pointer ${
-                  activeTab === 'activo'
-                    ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
-              >
-                <span>Conteo</span>
-                {activeSession && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => { setActiveTab('historico'); setSelectedHistoricCount(null); }}
-                className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center gap-1 cursor-pointer ${
-                  activeTab === 'historico'
-                    ? 'bg-white dark:bg-indigo-600 text-indigo-700 dark:text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
-              >
-                <span>Historial</span>
-                <span className="text-[9px] opacity-75">({historicalCounts.length})</span>
-              </button>
-            </div>
+          {/* Acciones y Selector de Pestaña */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {activeSession && (
+              <div className="flex items-center gap-1 px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[10px] font-mono font-bold text-slate-700 dark:text-slate-300">
+                <span className="text-emerald-600 dark:text-emerald-400 font-black">{activeSummary.checkedItems}</span>
+                <span className="text-slate-400">/</span>
+                <span>{activeSummary.totalItems}</span>
+                <span className="text-[9px] text-slate-400">({activeSummary.completedPercent}%)</span>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab(activeTab === 'activo' ? 'historico' : 'activo');
+                setSelectedHistoricCount(null);
+              }}
+              className={`p-1.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                activeTab === 'historico'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+              }`}
+              title={activeTab === 'activo' ? "Ver Historial de Auditorías" : "Volver al Conteo Activo"}
+            >
+              <History size={15} />
+              <span className="hidden sm:inline">{activeTab === 'activo' ? 'Historial' : 'Conteo'}</span>
+            </button>
 
             <button
               type="button"
               onClick={handleManualRefresh}
               disabled={isRefreshing}
               title="Sincronizar existencias del POS"
-              className="p-1.5 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
             >
               <RefreshCw size={15} className={isRefreshing ? "animate-spin text-indigo-500" : ""} />
             </button>
@@ -657,25 +646,25 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         </header>
 
         {/* ======================================================== */}
-        {/* 2. ÁREA PRINCIPAL CON SCROLL ÚNICO Y SIN PANTALLAS ROTAS */}
+        {/* 2. ÁREA DE TRABAJO PRINCIPAL (PANTALLA COMPLETA)         */}
         {/* ======================================================== */}
-        <div className="flex-1 overflow-y-auto flex flex-col relative">
+        <div className="flex-1 overflow-hidden flex flex-col relative">
           
-          {/* TAB 1: SESIÓN ACTIVA */}
+          {/* VISTA 1: CONTEO ACTIVO */}
           {activeTab === 'activo' && (
-            <div className="flex-1 flex flex-col">
+            <div className="flex-1 flex flex-col h-full overflow-hidden">
               
-              {/* CASO A: NO HAY SESIÓN ACTIVA -> FORMULARIO INICIAL */}
+              {/* CASO A: FORMULARIO PARA INICIAR NUEVA AUDITORÍA */}
               {!activeSession && (
-                <div className="flex-1 flex items-center justify-center p-4 md:p-6">
-                  <div className="max-w-md w-full bg-white dark:bg-[#11192e] p-5 md:p-7 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-4 text-center">
-                    <div className="w-14 h-14 mx-auto rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
-                      <ShieldCheck size={32} />
+                <div className="flex-1 overflow-y-auto p-4 flex items-center justify-center">
+                  <div className="max-w-md w-full bg-white dark:bg-[#11192e] p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-4 text-center">
+                    <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                      <ShieldCheck size={28} />
                     </div>
 
                     <div>
-                      <h2 className="text-base font-black text-slate-850 dark:text-white uppercase tracking-tight">
-                        Iniciar Control Físico de Inventario
+                      <h2 className="text-sm md:text-base font-black text-slate-850 dark:text-white uppercase tracking-tight">
+                        Nuevo Control Físico de Inventario
                       </h2>
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium leading-relaxed">
                         Verifica las existencias reales en anaqueles y estantes directamente con el stock del Punto de Venta.
@@ -683,13 +672,12 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                     </div>
 
                     <div className="flex flex-col gap-3 text-left">
-                      {/* Almacén */}
                       <div>
                         <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Ubicación / Almacén</label>
                         <select
                           value={storeName}
                           onChange={e => setStoreName(e.target.value)}
-                          className="w-full mt-1 p-2.5 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
+                          className="w-full mt-1 p-2 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                         >
                           <option value="Almacén Principal">Almacén Principal</option>
                           <option value="Sucursal Centro">Sucursal Centro</option>
@@ -697,7 +685,6 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         </select>
                       </div>
 
-                      {/* Auditor */}
                       <div>
                         <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Auditor Responsable</label>
                         <input
@@ -705,17 +692,16 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                           value={auditorName}
                           onChange={e => setAuditorName(e.target.value)}
                           placeholder="Ej. Juan Pérez"
-                          className="w-full mt-1 p-2.5 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
+                          className="w-full mt-1 p-2 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                         />
                       </div>
 
-                      {/* Alcance de Categorías */}
                       <div>
-                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Alcance de Auditoría</label>
+                        <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Alcance de Categorías</label>
                         <select
                           value={selectedCategory}
                           onChange={e => setSelectedCategory(e.target.value)}
-                          className="w-full mt-1 p-2.5 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
+                          className="w-full mt-1 p-2 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                         >
                           <option value="Todos">Todos los productos ({products?.length || 0} artículos)</option>
                           {categories.map(cat => (
@@ -724,37 +710,36 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         </select>
                       </div>
 
-                      {/* Selector de Modo */}
                       <div>
                         <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Modo de Control</label>
                         <div className="grid grid-cols-2 gap-2 mt-1">
                           <button
                             type="button"
                             onClick={() => setIsBlindMode(false)}
-                            className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition cursor-pointer ${
+                            className={`p-2 rounded-xl border text-left flex flex-col gap-0.5 transition cursor-pointer ${
                               !isBlindMode
-                                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-300 ring-2 ring-emerald-500/20'
+                                ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-300 ring-1 ring-emerald-500/30'
                                 : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500'
                             }`}
                           >
                             <span className="text-xs font-black uppercase flex items-center gap-1.5">
-                              <Eye size={13} className="text-emerald-500" />
-                              Stock Visible
+                              <Eye size={12} className="text-emerald-500" />
+                              Visible (POS)
                             </span>
-                            <span className="text-[9px] font-medium opacity-80 leading-tight">Muestra el stock del POS</span>
+                            <span className="text-[9px] font-medium opacity-80 leading-tight">Muestra el stock del sistema</span>
                           </button>
 
                           <button
                             type="button"
                             onClick={() => setIsBlindMode(true)}
-                            className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition cursor-pointer ${
+                            className={`p-2 rounded-xl border text-left flex flex-col gap-0.5 transition cursor-pointer ${
                               isBlindMode
-                                ? 'bg-indigo-500/10 border-indigo-500 text-indigo-800 dark:text-indigo-300 ring-2 ring-indigo-500/20'
+                                ? 'bg-indigo-500/10 border-indigo-500 text-indigo-800 dark:text-indigo-300 ring-1 ring-indigo-500/30'
                                 : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500'
                             }`}
                           >
                             <span className="text-xs font-black uppercase flex items-center gap-1.5">
-                              <ShieldCheck size={13} className="text-indigo-500" />
+                              <ShieldCheck size={12} className="text-indigo-500" />
                               A Ciegas
                             </span>
                             <span className="text-[9px] font-medium opacity-80 leading-tight">Oculta existencias</span>
@@ -762,10 +747,9 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         </div>
                       </div>
 
-                      {/* Advertencia de Segregación */}
                       {segregationWarning && !isAdmin && (
-                        <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2 text-amber-700 dark:text-amber-300 text-xs">
-                          <AlertTriangle size={15} className="shrink-0 mt-0.5 text-amber-500" />
+                        <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2 text-amber-700 dark:text-amber-300 text-xs">
+                          <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-500" />
                           <p className="text-[10px] leading-tight">{segregationWarning}</p>
                         </div>
                       )}
@@ -774,8 +758,8 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         type="button"
                         onClick={handleStartSession}
                         disabled={isLoading}
-                        className={`w-full mt-2 py-3 px-4 text-white font-black text-xs uppercase rounded-xl tracking-wider shadow-lg transition active:scale-98 cursor-pointer flex items-center justify-center gap-2 ${
-                          isBlindMode ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-500/20' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'
+                        className={`w-full mt-2 py-2.5 px-4 text-white font-black text-xs uppercase rounded-xl tracking-wider shadow-lg transition active:scale-98 cursor-pointer flex items-center justify-center gap-2 ${
+                          isBlindMode ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-emerald-600 hover:bg-emerald-500'
                         }`}
                       >
                         <Play size={13} />
@@ -786,15 +770,15 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                 </div>
               )}
 
-              {/* CASO B: SESIÓN COMPLETADA PENDIENTE DE APROBACIÓN POR ADMIN */}
+              {/* CASO B: SESIÓN COMPLETADA PENDIENTE DE APROBACIÓN */}
               {activeSession && activeSession.status === 'completado' && (
-                <div className="flex-1 p-3 md:p-6 flex flex-col items-center">
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center justify-center">
                   {!isAdmin ? (
-                    <div className="bg-white dark:bg-[#11192e] p-6 md:p-8 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl text-center flex flex-col items-center gap-4 max-w-md my-auto">
-                      <div className="w-14 h-14 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
-                        <CheckCircle size={32} />
+                    <div className="bg-white dark:bg-[#11192e] p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl text-center flex flex-col items-center gap-4 max-w-md">
+                      <div className="w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
+                        <CheckCircle size={28} />
                       </div>
-                      <h3 className="text-base font-black text-slate-850 dark:text-white uppercase">
+                      <h3 className="text-sm font-black text-slate-850 dark:text-white uppercase">
                         Conteo Finalizado y Enviado
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -804,100 +788,92 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         <button
                           type="button"
                           onClick={onClose}
-                          className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl transition"
+                          className="px-5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
                         >
                           Cerrar Pantalla
                         </button>
                       )}
                     </div>
                   ) : (
-                    <div className="bg-white dark:bg-[#11192e] p-4 md:p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-4 max-w-3xl w-full">
-                      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                    <div className="bg-white dark:bg-[#11192e] p-4 md:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-3 max-w-2xl w-full">
+                      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
                         <div>
-                          <h3 className="text-sm md:text-base font-black text-slate-800 dark:text-white uppercase tracking-tight">
-                            Reconciliación y Aprobación de Inventario
+                          <h3 className="text-xs md:text-sm font-black text-slate-800 dark:text-white uppercase tracking-tight">
+                            Reconciliación y Aprobación
                           </h3>
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                          <p className="text-[10px] text-slate-500 font-medium">
                             Auditor: <strong className="text-indigo-600 dark:text-indigo-400">{activeSession.auditor_name || activeSession.username}</strong>
                           </p>
                         </div>
-                        <span className="px-2.5 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-black uppercase rounded-lg border border-amber-500/20">
+                        <span className="px-2 py-0.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[9px] font-black uppercase rounded-lg border border-amber-500/20">
                           Pendiente Aprobación
                         </span>
                       </div>
 
-                      {/* Métricas compactas */}
-                      <div className="grid grid-cols-4 gap-2 bg-slate-50 dark:bg-black/30 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-center">
+                      <div className="grid grid-cols-4 gap-2 bg-slate-50 dark:bg-black/30 p-2.5 rounded-xl text-center">
                         <div>
-                          <span className="text-[9px] font-black uppercase text-slate-400 block">Total</span>
-                          <span className="text-xs md:text-sm font-mono font-bold text-slate-800 dark:text-white">{activeSummary.totalItems}</span>
+                          <span className="text-[8px] font-black uppercase text-slate-400 block">Total</span>
+                          <span className="text-xs font-mono font-bold text-slate-800 dark:text-white">{activeSummary.totalItems}</span>
                         </div>
                         <div>
-                          <span className="text-[9px] font-black uppercase text-slate-400 block">Coincidentes</span>
-                          <span className="text-xs md:text-sm font-mono font-bold text-emerald-500">
+                          <span className="text-[8px] font-black uppercase text-slate-400 block">Coincidentes</span>
+                          <span className="text-xs font-mono font-bold text-emerald-500">
                             {sessionItems.filter(it => it.counted_stock === (it.system_stock ?? it.live_stock ?? 0)).length}
                           </span>
                         </div>
                         <div>
-                          <span className="text-[9px] font-black uppercase text-slate-400 block">Con Dif.</span>
-                          <span className="text-xs md:text-sm font-mono font-bold text-rose-500">{activeSummary.productsWithDiff}</span>
+                          <span className="text-[8px] font-black uppercase text-slate-400 block">Con Dif.</span>
+                          <span className="text-xs font-mono font-bold text-rose-500">{activeSummary.productsWithDiff}</span>
                         </div>
                         <div>
-                          <span className="text-[9px] font-black uppercase text-slate-400 block">Dif. Neta</span>
-                          <span className={`text-xs md:text-sm font-mono font-bold ${activeSummary.totalDiscrepancyUnits >= 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                          <span className="text-[8px] font-black uppercase text-slate-400 block">Dif. Neta</span>
+                          <span className={`text-xs font-mono font-bold ${activeSummary.totalDiscrepancyUnits >= 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
                             {activeSummary.totalDiscrepancyUnits > 0 ? `+${activeSummary.totalDiscrepancyUnits}` : activeSummary.totalDiscrepancyUnits} u
                           </span>
                         </div>
                       </div>
 
-                      {/* Lista de productos para reconciliar */}
-                      <div className="flex flex-col gap-1.5">
-                        <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                          Detalle Comparativo de Artículos:
-                        </span>
-                        <div className="max-h-[300px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
-                          {sessionItems.map(it => {
-                            const sys = it.system_stock ?? it.live_stock ?? 0;
-                            const physical = it.counted_stock ?? 0;
-                            const diff = physical - sys;
+                      <div className="max-h-[260px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-100 dark:divide-slate-800">
+                        {sessionItems.map(it => {
+                          const sys = it.system_stock ?? it.live_stock ?? 0;
+                          const physical = it.counted_stock ?? 0;
+                          const diff = physical - sys;
 
-                            return (
-                              <div key={it.id} className="p-2.5 flex items-center justify-between text-xs gap-2">
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-bold text-slate-800 dark:text-white uppercase truncate text-xs">{it.product_name}</div>
-                                  <div className="text-[10px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
-                                </div>
-                                <div className="flex items-center gap-2 shrink-0 text-right font-mono">
-                                  <span className="text-[10px] text-slate-500">POS: <strong>{sys}</strong></span>
-                                  <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-bold text-slate-800 dark:text-white">
-                                    Físico: {physical}
-                                  </span>
-                                  <span className={`text-[10px] font-black w-14 text-right ${diff === 0 ? 'text-emerald-500' : diff > 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
-                                    {diff === 0 ? '0 u' : diff > 0 ? `+${diff} u` : `${diff} u`}
-                                  </span>
-                                </div>
+                          return (
+                            <div key={it.id} className="p-2 flex items-center justify-between text-xs gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="font-bold text-slate-800 dark:text-white uppercase truncate text-xs">{it.product_name}</div>
+                                <div className="text-[9px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
                               </div>
-                            );
-                          })}
-                        </div>
+                              <div className="flex items-center gap-2 shrink-0 text-right font-mono text-[10px]">
+                                <span className="text-slate-500">POS: <strong>{sys}</strong></span>
+                                <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-bold text-slate-800 dark:text-white">
+                                  Físico: {physical}
+                                </span>
+                                <span className={`font-black w-12 text-right ${diff === 0 ? 'text-emerald-500' : diff > 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                                  {diff === 0 ? '0 u' : diff > 0 ? `+${diff} u` : `${diff} u`}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
 
-                      {/* Observaciones */}
                       <div>
                         <input
                           type="text"
                           value={adminNotes}
                           onChange={e => setAdminNotes(e.target.value)}
-                          placeholder="Observaciones de conciliación (opcional)..."
-                          className="w-full p-2.5 text-xs bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
+                          placeholder="Observaciones de conciliación..."
+                          className="w-full p-2 text-xs bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
                         />
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 mt-1">
+                      <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
                           onClick={handleCancelSession}
-                          className="py-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
+                          className="py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
                         >
                           Rechazar
                         </button>
@@ -905,7 +881,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                           type="button"
                           onClick={handleApproveCount}
                           disabled={isLoading}
-                          className="py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl transition shadow-lg shadow-emerald-500/20 cursor-pointer"
+                          className="py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl transition shadow-md cursor-pointer"
                         >
                           {isLoading ? 'Aplicando...' : 'Aprobar y Ajustar Stock'}
                         </button>
@@ -915,75 +891,21 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                 </div>
               )}
 
-              {/* CASO C: AUDITORÍA EN CURSO (CONTEO ACTIVO) -> ULTRA-OPTIMIZADO */}
+              {/* CASO C: CONTEO FÍSICO ACTIVO - ESPACIO Y SCROLL MÁXIMO */}
               {activeSession && activeSession.status !== 'completado' && (
-                <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex-1 flex flex-col h-full overflow-hidden">
                   
-                  {/* BARRA SUPERIOR FIJA: RESUMEN DE PROGRESO + FILTROS RÁPIDOS */}
-                  <div className="bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-800 shrink-0 p-2 md:p-3 flex flex-col gap-2 shadow-xs z-10">
+                  {/* BARRA SUPERIOR DE BÚSQUEDA Y FILTROS INTEGRADA */}
+                  <div className="bg-white dark:bg-[#0f172a] border-b border-slate-200 dark:border-slate-800 px-3 py-2 shrink-0 flex flex-col gap-1.5 z-10">
                     
-                    {/* Fila 1: Progreso + Botón Igualar Pendientes */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="text-[11px] font-black uppercase text-slate-700 dark:text-slate-300">
-                            Progreso:
-                          </span>
-                          <span className="text-xs font-mono font-black text-indigo-600 dark:text-indigo-400">
-                            {activeSummary.checkedItems}/{activeSummary.totalItems}
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-400">
-                            ({activeSummary.completedPercent}%)
-                          </span>
-                        </div>
-
-                        {/* Barra de progreso compacta */}
-                        <div className="flex-1 h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden min-w-[40px] max-w-[160px]">
-                          <div 
-                            className="h-full bg-emerald-500 transition-all duration-300 rounded-full"
-                            style={{ width: `${activeSummary.completedPercent}%` }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Quick batch button for Admin */}
-                      {isAdmin && activeSummary.pendingItems > 0 && (
-                        <button
-                          type="button"
-                          onClick={handleMatchAllPending}
-                          disabled={isLoading}
-                          className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 text-[10px] font-black uppercase rounded-lg border border-indigo-200 dark:border-indigo-800 transition cursor-pointer flex items-center gap-1 shrink-0"
-                          title="Marcar todos los artículos pendientes con su stock actual del POS"
-                        >
-                          <Zap size={12} className="text-amber-500 fill-amber-500" />
-                          <span>= Todo al POS</span>
-                        </button>
-                      )}
-
-                      {/* Toggle Ocultar Revisados */}
-                      <button
-                        type="button"
-                        onClick={() => setHideRevisados(!hideRevisados)}
-                        className={`px-2 py-1 text-[10px] font-bold rounded-lg transition border flex items-center gap-1 cursor-pointer shrink-0 ${
-                          hideRevisados 
-                            ? 'bg-amber-500 text-white border-amber-600' 
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-                        }`}
-                        title="Ocultar los artículos que ya fueron contados para enfocarse en los pendientes"
-                      >
-                        <Eye size={12} />
-                        <span className="hidden xs:inline">Solo</span> Pendientes
-                      </button>
-                    </div>
-
-                    {/* Fila 2: Buscador + Filtros por Pestañas Horizontales */}
+                    {/* Fila 1: Buscador + Botón = Todo al POS */}
                     <div className="flex items-center gap-1.5">
                       <div className="relative flex-1 min-w-0">
                         <input
                           type="text"
                           value={itemSearch}
                           onChange={e => setItemSearch(e.target.value)}
-                          placeholder="Buscar nombre, SKU o #ID..."
+                          placeholder="Buscar artículo, SKU, #ID..."
                           className="w-full pl-8 pr-7 py-1.5 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                           autoComplete="off"
                           spellCheck="false"
@@ -1000,12 +922,12 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         )}
                       </div>
 
-                      {/* Filtro por Categoría si hay varias */}
+                      {/* Filtro por Categoría si existen varias */}
                       {activeSessionCategories.length > 1 && (
                         <select
                           value={selectedCategoryFilter}
                           onChange={e => setSelectedCategoryFilter(e.target.value)}
-                          className="max-w-[110px] xs:max-w-[130px] p-1.5 text-[10px] font-bold bg-slate-50 dark:bg-[#151f32] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
+                          className="max-w-[120px] p-1.5 text-[10px] font-bold bg-slate-50 dark:bg-[#151f32] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none"
                         >
                           <option value="ALL">Categorías ({activeSessionCategories.length})</option>
                           {activeSessionCategories.map(c => (
@@ -1013,10 +935,24 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                           ))}
                         </select>
                       )}
+
+                      {/* Botón rápido = Todo al POS para Admin */}
+                      {isAdmin && activeSummary.pendingItems > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleMatchAllPending}
+                          disabled={isLoading}
+                          className="px-2 py-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[10px] font-black uppercase rounded-xl border border-indigo-200 dark:border-indigo-800 transition cursor-pointer flex items-center gap-1 shrink-0"
+                          title="Marcar todos los artículos pendientes con su stock actual del POS"
+                        >
+                          <Zap size={12} className="text-amber-500 fill-amber-500" />
+                          <span className="hidden sm:inline">= Todo</span> POS
+                        </button>
+                      )}
                     </div>
 
-                    {/* Fila 3: Chips de Estado (Scroll horizontal suave) */}
-                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-0.5 pb-0.5">
+                    {/* Fila 2: Chips de Filtro Horizontal */}
+                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-0.5">
                       <button
                         type="button"
                         onClick={() => setActiveFilter('todos')}
@@ -1071,15 +1007,15 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                   </div>
 
                   {/* ======================================================== */}
-                  {/* LISTADO DE PRODUCTOS ULTRA-COMPACTO Y ERGONÓMICO        */}
+                  {/* LISTA DE ARTÍCULOS DE ALTA DENSIDAD Y ESPACIO EXPANDIDO  */}
                   {/* ======================================================== */}
-                  <div className="flex-1 overflow-y-auto p-2 md:p-3 flex flex-col gap-2 pb-24">
+                  <div className="flex-1 overflow-y-auto p-2 md:p-3 flex flex-col gap-1.5 pb-20">
                     {filteredItems.length === 0 ? (
-                      <div className="p-8 text-center text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-wide bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-2xl">
+                      <div className="p-8 text-center text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-wide bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-2xl my-auto">
                         {itemSearch ? 'No se encontraron artículos con ese criterio.' : 'No hay artículos en esta vista.'}
                       </div>
                     ) : (
-                      filteredItems.map((it, idx) => {
+                      filteredItems.map(it => {
                         const isChecked = it.is_checked === 1;
                         const sysStock = it.system_stock ?? it.live_stock ?? 0;
                         const physical = it.counted_stock ?? 0;
@@ -1089,140 +1025,120 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         return (
                           <div
                             key={it.id}
-                            id={`product-card-${it.id}`}
-                            className={`p-2.5 md:p-3 rounded-xl border transition-all flex flex-col gap-1.5 ${
+                            id={`item-count-${it.id}`}
+                            className={`p-2 md:p-2.5 rounded-xl border transition-all flex items-center justify-between gap-2 ${
                               isChecked
-                                ? 'bg-white dark:bg-[#0f172a] border-emerald-500/40 shadow-xs ring-1 ring-emerald-500/20'
-                                : 'bg-white dark:bg-[#0f172a] border-slate-250 dark:border-slate-800 shadow-xs'
+                                ? 'bg-white dark:bg-[#0f172a] border-emerald-500/40 shadow-xs'
+                                : 'bg-white dark:bg-[#0f172a] border-slate-200 dark:border-slate-800 shadow-xs'
                             }`}
                           >
-                            {/* Fila Superior: Nombre del producto + Tags */}
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                                  <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-[9px] font-mono font-bold text-slate-600 dark:text-slate-300">
-                                    #{it.product_id}
-                                  </span>
-                                  <span className="px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-[9px] font-mono text-slate-500 dark:text-slate-400">
+                            {/* Información del Artículo (Lado Izquierdo) */}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[9px] font-mono font-bold text-slate-400">
+                                  #{it.product_id}
+                                </span>
+                                {it.product_sku && (
+                                  <span className="text-[9px] font-mono text-slate-400">
                                     SKU: {it.product_sku}
                                   </span>
-                                  {it.product_category && (
-                                    <span className="px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/40 text-[9px] font-black uppercase text-indigo-600 dark:text-indigo-400">
-                                      {it.product_category}
-                                    </span>
-                                  )}
-                                </div>
-                                <h3 className="text-xs md:text-sm font-black text-slate-850 dark:text-white uppercase leading-tight line-clamp-2">
-                                  {it.product_name}
-                                </h3>
+                                )}
+                                {it.product_category && (
+                                  <span className="px-1 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/40 text-[8px] font-black uppercase text-indigo-600 dark:text-indigo-400">
+                                    {it.product_category}
+                                  </span>
+                                )}
                               </div>
+                              
+                              <h3 className="text-xs md:text-sm font-black text-slate-900 dark:text-white uppercase leading-tight truncate mt-0.5">
+                                {it.product_name}
+                              </h3>
 
-                              {/* Badge Estado */}
-                              <div className="shrink-0">
-                                {isChecked ? (
-                                  <div className="flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-md text-[10px] font-black uppercase">
-                                    <Check size={11} className="stroke-[3]" />
-                                    <span>Contado</span>
-                                  </div>
-                                ) : (
-                                  <div className="px-2 py-0.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 rounded-md text-[10px] font-black uppercase">
-                                    Pendiente
-                                  </div>
+                              {/* Info de Stock POS y Diferencia */}
+                              <div className="flex items-center gap-2 mt-0.5 font-mono text-[10px]">
+                                {showStock && (
+                                  <span className="text-slate-500 dark:text-slate-400 font-bold">
+                                    POS: <strong className="text-slate-900 dark:text-white">{sysStock} u</strong>
+                                  </span>
+                                )}
+                                {isChecked && showStock && (
+                                  <span className={`font-black ${
+                                    diff === 0 
+                                      ? 'text-emerald-600 dark:text-emerald-400' 
+                                      : diff > 0 
+                                        ? 'text-indigo-600 dark:text-indigo-400' 
+                                        : 'text-rose-600 dark:text-rose-400'
+                                  }`}>
+                                    {diff === 0 ? '✓ Coincide' : diff > 0 ? `+${diff} u` : `${diff} u`}
+                                  </span>
                                 )}
                               </div>
                             </div>
 
-                            {/* Fila Inferior: Controles de Conteo + Atajos */}
-                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+                            {/* Controles de Conteo (Lado Derecho) */}
+                            <div className="flex items-center gap-1.5 shrink-0">
                               
-                              {/* Lado Izquierdo: Stock POS & Diferencia */}
-                              <div className="flex items-center gap-1.5">
-                                {showStock && (
-                                  <div className="flex items-center gap-1 px-2 py-1 bg-slate-100 dark:bg-slate-800/90 rounded-lg text-xs font-mono">
-                                    <span className="text-[10px] font-bold text-slate-400 uppercase">POS:</span>
-                                    <strong className="text-slate-800 dark:text-white font-black">{sysStock}</strong>
-                                  </div>
-                                )}
-
-                                {isChecked && showStock && (
-                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-black ${
-                                    diff === 0 
-                                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' 
-                                      : diff > 0 
-                                        ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400' 
-                                        : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
-                                  }`}>
-                                    {diff === 0 ? '✓ 0' : diff > 0 ? `+${diff}` : `${diff}`}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* Lado Derecho: Stepper Touch-Friendly + Botón Rápido */}
-                              <div className="flex items-center gap-1.5 ml-auto">
-                                
-                                {/* Botón = POS rápido */}
-                                {showStock && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSetStockToSystem(it)}
-                                    className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase transition border cursor-pointer ${
-                                      isChecked && physical === sysStock
-                                        ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
-                                        : 'bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800'
-                                    }`}
-                                    title="Establecer igual al stock del POS y marcar contado"
-                                  >
-                                    = POS ({sysStock})
-                                  </button>
-                                )}
-
-                                {/* Stepper de Conteo */}
-                                <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5 border border-slate-200 dark:border-slate-700">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1), is_checked: 1 })}
-                                    className="w-7 h-7 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-sm flex items-center justify-center hover:bg-slate-200 transition active:scale-90 cursor-pointer shadow-xs"
-                                  >
-                                    -
-                                  </button>
-
-                                  <input
-                                    type="number"
-                                    inputMode="numeric"
-                                    min="0"
-                                    value={it.counted_stock === null || it.counted_stock === undefined ? '' : it.counted_stock}
-                                    onFocus={e => e.target.select()}
-                                    onChange={e => {
-                                      const val = parseInt(e.target.value);
-                                      handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val), is_checked: 1 });
-                                    }}
-                                    className="w-11 h-7 text-center font-mono font-black text-xs bg-transparent text-slate-850 dark:text-white focus:outline-none"
-                                  />
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUpdateItem(it.id, { counted_stock: physical + 1, is_checked: 1 })}
-                                    className="w-7 h-7 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-sm flex items-center justify-center hover:bg-slate-200 transition active:scale-90 cursor-pointer shadow-xs"
-                                  >
-                                    +
-                                  </button>
-                                </div>
-
-                                {/* Botón Check / Guardar */}
+                              {/* Botón = POS */}
+                              {showStock && (
                                 <button
                                   type="button"
-                                  onClick={() => handleToggleCheck(it)}
-                                  className={`w-8 h-8 rounded-lg flex items-center justify-center transition active:scale-95 cursor-pointer shrink-0 ${
-                                    isChecked
-                                      ? 'bg-emerald-600 text-white shadow-xs'
-                                      : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-emerald-500 hover:text-white'
+                                  onClick={() => handleSetStockToSystem(it)}
+                                  className={`px-2 py-1.5 rounded-lg text-[10px] font-black uppercase transition border cursor-pointer ${
+                                    isChecked && physical === sysStock
+                                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                                      : 'bg-slate-100 hover:bg-indigo-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                                   }`}
-                                  title={isChecked ? "Marcar como pendiente" : "Marcar como verificado"}
+                                  title="Igualar a la cantidad del POS"
                                 >
-                                  <Check size={16} className="stroke-[3]" />
+                                  = POS ({sysStock})
+                                </button>
+                              )}
+
+                              {/* Stepper de Conteo */}
+                              <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5 border border-slate-200 dark:border-slate-700">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1), is_checked: 1 })}
+                                  className="w-7 h-7 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-sm flex items-center justify-center hover:bg-slate-200 transition active:scale-90 cursor-pointer shadow-xs"
+                                >
+                                  -
                                 </button>
 
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min="0"
+                                  value={it.counted_stock === null || it.counted_stock === undefined ? '' : it.counted_stock}
+                                  onFocus={e => e.target.select()}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value);
+                                    handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val), is_checked: 1 });
+                                  }}
+                                  className="w-10 h-7 text-center font-mono font-black text-xs bg-transparent text-slate-900 dark:text-white focus:outline-none"
+                                />
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: physical + 1, is_checked: 1 })}
+                                  className="w-7 h-7 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-sm flex items-center justify-center hover:bg-slate-200 transition active:scale-90 cursor-pointer shadow-xs"
+                                >
+                                  +
+                                </button>
                               </div>
+
+                              {/* Botón Marcar / Check */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleCheck(it)}
+                                className={`w-8 h-8 rounded-lg flex items-center justify-center transition active:scale-95 cursor-pointer shrink-0 ${
+                                  isChecked
+                                    ? 'bg-emerald-600 text-white shadow-xs'
+                                    : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-emerald-500 hover:text-white'
+                                }`}
+                                title={isChecked ? "Marcar como pendiente" : "Marcar como verificado"}
+                              >
+                                <Check size={16} className="stroke-[3]" />
+                              </button>
 
                             </div>
 
@@ -1233,14 +1149,14 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                   </div>
 
                   {/* ======================================================== */}
-                  {/* BARRA INFERIOR FIJA FLOTANTE / FOOTER ACCIONES           */}
+                  {/* BARRA INFERIOR FIJA / ACCIONES (Altura: ~48px)           */}
                   {/* ======================================================== */}
-                  <div className="absolute bottom-0 inset-x-0 bg-white/95 dark:bg-[#0f172a]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 p-2.5 md:p-3 flex items-center justify-between gap-2 z-30 shadow-lg">
+                  <div className="absolute bottom-0 inset-x-0 bg-white/95 dark:bg-[#0f172a]/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 p-2 md:p-2.5 flex items-center justify-between gap-2 z-30 shadow-lg">
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={handleCancelSession}
-                        className="px-3 py-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-xs font-bold uppercase rounded-xl transition cursor-pointer"
+                        className="px-2.5 py-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-[11px] font-bold uppercase rounded-xl transition cursor-pointer"
                       >
                         Cancelar
                       </button>
@@ -1248,7 +1164,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         <button
                           type="button"
                           onClick={onClose}
-                          className="px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold uppercase rounded-xl transition cursor-pointer"
+                          className="px-2.5 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-bold uppercase rounded-xl transition cursor-pointer"
                         >
                           Pausar
                         </button>
@@ -1259,13 +1175,13 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                       type="button"
                       onClick={handleCompleteSession}
                       disabled={activeSummary.pendingItems > 0 || isLoading}
-                      className={`flex-1 max-w-sm py-2.5 px-4 text-xs font-black uppercase rounded-xl transition flex items-center justify-center gap-1.5 shadow-md ${
+                      className={`flex-1 max-w-sm py-2 px-3 text-xs font-black uppercase rounded-xl transition flex items-center justify-center gap-1.5 shadow-md ${
                         activeSummary.pendingItems > 0
                           ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed opacity-90'
                           : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20 active:scale-98 cursor-pointer'
                       }`}
                     >
-                      <CheckCircle size={15} className="shrink-0" />
+                      <CheckCircle size={14} className="shrink-0" />
                       <span className="truncate">
                         {activeSummary.pendingItems > 0
                           ? `Faltan ${activeSummary.pendingItems} artículos`
@@ -1280,26 +1196,35 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
             </div>
           )}
 
-          {/* TAB 2: HISTORIAL DE AUDITORÍAS */}
+          {/* VISTA 2: HISTORIAL DE AUDITORÍAS */}
           {activeTab === 'historico' && (
-            <div className="flex-1 p-3 md:p-5 flex flex-col gap-3">
+            <div className="flex-1 overflow-y-auto p-3 md:p-4 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs md:text-sm font-black text-slate-800 dark:text-white uppercase tracking-tight">
+                  Historial de Auditorías Físicas
+                </h3>
+                <span className="text-[10px] font-bold text-slate-400">
+                  {historicalCounts.length} registros
+                </span>
+              </div>
+
               {historicalCounts.length === 0 ? (
                 <div className="p-10 text-center text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-wide bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-2xl my-auto">
                   No hay sesiones de auditoría física registradas en el historial.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                   {historicalCounts.map(count => (
                     <div 
                       key={count.id}
-                      className="p-3.5 bg-white dark:bg-[#0f172a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between gap-2.5"
+                      className="p-3 bg-white dark:bg-[#0f172a] rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between gap-2"
                     >
                       <div>
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase">
                             Auditoría #{count.id}
                           </span>
-                          <span className={`px-2 py-0.5 text-[9px] font-black uppercase rounded border ${
+                          <span className={`px-2 py-0.2 text-[9px] font-black uppercase rounded border ${
                             count.status === 'cerrado' || count.status === 'aprobado'
                               ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
                               : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
@@ -1307,10 +1232,10 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                             {count.status === 'cerrado' || count.status === 'aprobado' ? 'Conciliado' : count.status}
                           </span>
                         </div>
-                        <h4 className="text-xs font-black text-slate-800 dark:text-white uppercase mt-1 truncate">
+                        <h4 className="text-xs font-black text-slate-800 dark:text-white uppercase mt-0.5 truncate">
                           {count.store_name || 'Almacén Principal'}
                         </h4>
-                        <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                        <p className="text-[10px] text-slate-400 font-medium">
                           Auditor: {count.auditor_name || count.username} · {new Date(count.created_at || count.started_at || '').toLocaleDateString()}
                         </p>
                       </div>
@@ -1318,7 +1243,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                       <button
                         type="button"
                         onClick={() => handleViewHistoricCount(count)}
-                        className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-bold uppercase rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5"
+                        className="w-full py-1.5 px-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold uppercase rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5"
                       >
                         <FileText size={12} />
                         <span>Ver Detalle</span>
@@ -1336,21 +1261,21 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
       {/* MODAL DETALLE HISTÓRICO */}
       {selectedHistoricCount && (
-        <div className="fixed inset-0 z-[1100] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-3 md:p-6">
-          <div className="bg-white dark:bg-[#0f172a] rounded-2xl border border-slate-200 dark:border-slate-800 max-w-xl w-full p-4 md:p-5 shadow-2xl flex flex-col gap-3 max-h-[85vh]">
+        <div className="fixed inset-0 z-[11000] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-3 md:p-6">
+          <div className="bg-white dark:bg-[#0f172a] rounded-2xl border border-slate-200 dark:border-slate-800 max-w-xl w-full p-4 shadow-2xl flex flex-col gap-3 max-h-[85vh]">
             <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
               <div>
                 <h3 className="text-sm font-black text-slate-800 dark:text-white uppercase">
                   Auditoría #{selectedHistoricCount.id}
                 </h3>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[10px] text-slate-400">
                   {selectedHistoricCount.store_name || 'Almacén Principal'} · {selectedHistoricCount.auditor_name || selectedHistoricCount.username}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedHistoricCount(null)}
-                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700"
+                className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700 cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -1358,10 +1283,10 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl">
               {historicItems.map(it => (
-                <div key={it.id} className="p-2.5 flex items-center justify-between text-xs gap-2">
+                <div key={it.id} className="p-2 flex items-center justify-between text-xs gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="font-bold text-slate-800 dark:text-white uppercase truncate text-xs">{it.product_name}</div>
-                    <div className="text-[10px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
+                    <div className="text-[9px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
                   </div>
                   <div className="flex items-center gap-2 font-mono text-xs">
                     <span className="text-[10px] text-slate-500">POS: {it.system_stock ?? it.live_stock ?? 0}</span>
@@ -1374,7 +1299,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
             <button
               type="button"
               onClick={() => setSelectedHistoricCount(null)}
-              className="w-full py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl"
+              className="w-full py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl cursor-pointer"
             >
               Cerrar
             </button>

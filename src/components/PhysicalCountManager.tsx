@@ -4,7 +4,7 @@ import { safeDispatchEvent } from '../utils/events';
 import { hasPermission } from '../utils/permissions';
 import { 
   ClipboardCheck, Clock, CheckCircle, AlertTriangle, Play, X, Trash2, 
-  Save, Eye, RefreshCw, Sparkles, Filter, Search, Check, Ban, ChevronDown, ChevronUp, AlertOctagon, Undo, ChevronRight, ShieldCheck, ShieldAlert, UserCheck
+  Save, Eye, RefreshCw, Sparkles, Filter, Search, Check, Ban, ChevronDown, ChevronUp, AlertOctagon, Undo, ChevronRight, ShieldCheck, ShieldAlert, UserCheck, CheckSquare, Square, FileText
 } from 'lucide-react';
 
 interface PhysicalCountManagerProps {
@@ -40,13 +40,11 @@ interface CountItem {
   product_sku: string;
   product_category: string;
   system_stock?: number;
-  expected_quantity_snapshot?: number;
-  movements_during_count?: number;
-  adjusted_expected_quantity?: number;
+  expected_quantity?: number;
+  live_stock?: number;
   counted_stock: number;
   physical_quantity?: number;
   difference?: number;
-  had_movements_during_count?: number;
   is_checked: number;
   status: string;
   notes?: string | null;
@@ -58,7 +56,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const isAdmin = user?.role === 'admin' || user?.role === 'propietario' || user?.role === 'administrador' || user?.role === 'dueño' || user?.role === 'jefe';
   const canPreviewQuantities = isAdmin || hasPermission(user, 'preview_quantities_in_count');
 
-  // Prevent background page scrolling when audit overlay is active ONLY if not embedded
+  // Bloqueo de scroll de fondo si no está embebido
   useEffect(() => {
     if (!embeddedMode) {
       document.body.style.overflow = 'hidden';
@@ -73,8 +71,9 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const [sessionItems, setSessionItems] = useState<CountItem[]>([]);
   const [historicalCounts, setHistoricalCounts] = useState<InventoryCount[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // New session form states
+  // Estados para inicio de nueva sesión
   const [auditorName, setAuditorName] = useState<string>(user?.username || 'Auditor Almacén');
   const [storeName, setStoreName] = useState<string>('Almacén Principal');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
@@ -82,34 +81,24 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const [isBlindMode, setIsBlindMode] = useState<boolean>(!isAdmin && !canPreviewQuantities);
   const [sessionNotes, setSessionNotes] = useState<string>('');
 
-  // Segregation of Duties state
+  // Advertencia de segregación de funciones
   const [overrideSegregation, setOverrideSegregation] = useState<boolean>(false);
   const [overrideReason, setOverrideReason] = useState<string>('');
   const [segregationWarning, setSegregationWarning] = useState<string | null>(null);
 
-  // Filtering active count items
+  // Filtros del listado de conteo activo
   const [itemSearch, setItemSearch] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'todos' | 'pendientes' | 'revisados' | 'diferencias' | 'recuento'>('todos');
+  const [activeFilter, setActiveFilter] = useState<'todos' | 'pendientes' | 'revisados' | 'diferencias'>('todos');
   const [hideRevisados, setHideRevisados] = useState(false);
 
-  // Expanded product movements
-  const [expandedMovements, setExpandedMovements] = useState<Record<number, boolean>>({});
-  const [movementsByProduct, setMovementsByProduct] = useState<Record<number, any[]>>({});
-  const [loadingMovements, setLoadingMovements] = useState<Record<number, boolean>>({});
-
-  // Recount selection
-  const [selectedForRecount, setSelectedForRecount] = useState<number[]>([]);
-  const [recountReason, setRecountReason] = useState<string>('');
-  const [isRequestingRecount, setIsRequestingRecount] = useState<boolean>(false);
-
-  // Selected historic count view
+  // Modal / Detalle de sesión histórica
   const [selectedHistoricCount, setSelectedHistoricCount] = useState<InventoryCount | null>(null);
   const [historicItems, setHistoricItems] = useState<CountItem[]>([]);
 
-  // Extra notes for admin approval
+  // Notas del administrador para aprobación
   const [adminNotes, setAdminNotes] = useState('');
 
-  // Fetch initial data
+  // Carga inicial
   useEffect(() => {
     fetchProducts();
     fetchActiveSession();
@@ -118,17 +107,17 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
   useEffect(() => {
     if (products && products.length > 0) {
-      const uniqueCats = Array.from(new Set(products.map(p => p.category || 'Sin Categoría')));
+      const uniqueCats = Array.from(new Set(products.map(p => p.category || 'Sin Categoría'))).filter(Boolean);
       setCategories(uniqueCats);
     }
   }, [products]);
 
-  // Check segregation warning locally (ONLY for non-admin workers)
+  // Validar segregación de funciones para trabajadores
   useEffect(() => {
     if (!isAdmin && user?.username && auditorName) {
       const isOperatorSelfAuditing = auditorName.toLowerCase().trim().includes(user.username.toLowerCase().trim()) || auditorName.toLowerCase().includes('cajero');
       if (isOperatorSelfAuditing && !overrideSegregation) {
-        setSegregationWarning("Advertencia de Segregación de Funciones: Se requiere autorización formal para auto-auditoría de trabajador.");
+        setSegregationWarning("Advertencia de Segregación: Se requiere confirmación para auto-auditoría de trabajador.");
       } else {
         setSegregationWarning(null);
       }
@@ -137,20 +126,27 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     }
   }, [auditorName, user, overrideSegregation, isAdmin]);
 
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchProducts();
+    await fetchActiveSession();
+    await fetchHistory();
+    setIsRefreshing(false);
+    showNotification?.("✓ Datos y existencias sincronizados con el Punto de Venta.", "info");
+  };
+
   const fetchActiveSession = async () => {
     setIsLoading(true);
     try {
       const res = await fetch(`/api/inventory-counts?user_role=${user?.role || ''}`, {
-        headers: {
-          'x-user-role': user?.role || ''
-        }
+        headers: { 'x-user-role': user?.role || '' }
       });
       if (res.ok) {
         const counts: InventoryCount[] = await res.json();
         const active = counts.find(c => c.status === 'en_progreso' || c.status === 'completado' || c.status === 'pausado' || c.status === 'finalizado');
         if (active) {
           setActiveSession(active);
-          fetchSessionItems(active.id);
+          await fetchSessionItems(active.id);
         } else {
           setActiveSession(null);
           setSessionItems([]);
@@ -188,13 +184,24 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         const isSanitized = data.is_blind_sanitized === true;
 
         const mapItems = (items: any[]) => items.map(it => {
+          // El stock en tiempo real del POS siempre tiene máxima prioridad
           const prodObj = products?.find(p => p.id === it.product_id);
+          const liveStock = prodObj?.stock !== undefined ? prodObj.stock : (it.live_stock ?? it.expected_quantity ?? 0);
+          const physicalQty = it.physical_quantity ?? 0;
+          const isChecked = it.status !== 'pendiente' ? 1 : 0;
+          const diff = physicalQty - liveStock;
+
           return {
             ...it,
-            system_stock: isSanitized ? undefined : (it.expected_quantity_snapshot ?? it.expected_quantity),
-            counted_stock: it.physical_quantity ?? 0,
-            product_category: prodObj?.category || 'Sin Categoría',
-            is_checked: it.status !== 'pendiente' ? 1 : 0
+            product_name: prodObj?.name || it.product_name,
+            product_sku: prodObj?.sku || it.product_sku || 'N/A',
+            product_category: prodObj?.category || it.product_category || 'General',
+            system_stock: isSanitized ? undefined : liveStock,
+            live_stock: liveStock,
+            counted_stock: physicalQty,
+            difference: isSanitized ? 0 : diff,
+            is_checked: isChecked,
+            status: it.status || 'pendiente'
           };
         });
 
@@ -241,6 +248,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
       if (res.ok) {
         showNotification?.(`✓ Nueva sesión de auditoría física${isBlindMode ? ' a ciegas' : ''} iniciada con éxito.`, "success");
+        await fetchProducts();
         await fetchActiveSession();
       } else if (responseData.segregation_warning) {
         setSegregationWarning(responseData.error);
@@ -261,17 +269,20 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     const item = sessionItems.find(it => it.id === itemId);
     if (!item) return;
 
-    const newStock = updatedFields.counted_stock !== undefined ? updatedFields.counted_stock : item.counted_stock;
+    const newStock = updatedFields.counted_stock !== undefined ? Math.max(0, updatedFields.counted_stock) : item.counted_stock;
     const nextChecked = updatedFields.is_checked !== undefined ? updatedFields.is_checked : item.is_checked;
-    
-    let nextStatus = updatedFields.status !== undefined ? updatedFields.status : (nextChecked === 0 ? 'pendiente' : 'contado');
+    const nextStatus = updatedFields.status !== undefined ? updatedFields.status : (nextChecked === 0 ? 'pendiente' : 'contado');
 
-    // Local optimistic update
+    const sysStock = item.system_stock ?? item.live_stock ?? 0;
+    const diff = newStock - sysStock;
+
+    // Actualización optimista inmediata
     setSessionItems(prev => prev.map(it => it.id === itemId ? { 
       ...it, 
       counted_stock: newStock,
       is_checked: nextStatus !== 'pendiente' ? 1 : 0,
       status: nextStatus,
+      difference: diff,
       notes: updatedFields.notes !== undefined ? updatedFields.notes : it.notes
     } : it));
 
@@ -289,8 +300,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         })
       });
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        console.error("Failed to update count item on server database:", errData.error || res.statusText);
+        console.error("Failed to update count item on server");
       }
     } catch (err) {
       console.error("Network error while updating count item:", err);
@@ -298,81 +308,37 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   };
 
   const handleToggleCheck = async (item: CountItem) => {
-    if (item.counted_stock === null || item.counted_stock === undefined || isNaN(item.counted_stock)) {
-      showNotification?.("Ingresa la cantidad física encontrada antes de guardar.", "error");
-      return;
-    }
-
     const isChecked = item.is_checked === 1;
     const nextChecked = isChecked ? 0 : 1;
-    
     await handleUpdateItem(item.id, { is_checked: nextChecked });
 
     if (nextChecked === 1) {
       setTimeout(() => {
-        const currentIndex = sessionItems.findIndex(it => it.id === item.id);
-        const nextUnchecked = sessionItems.slice(currentIndex + 1).find(it => it.is_checked === 0);
+        const currentIndex = filteredItems.findIndex(it => it.id === item.id);
+        const nextUnchecked = filteredItems.slice(currentIndex + 1).find(it => it.is_checked === 0);
         if (nextUnchecked) {
           const el = document.getElementById(`product-card-${nextUnchecked.id}`);
           if (el) {
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
           }
         }
-      }, 350);
+      }, 200);
     }
   };
 
-  const handleRequestRecount = async () => {
-    if (!activeSession || selectedForRecount.length === 0) return;
-    setIsLoading(true);
-    try {
-      const res = await fetch(`/api/inventory-counts/${activeSession.id}/recount`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          item_ids: selectedForRecount,
-          reason: recountReason || 'Administración solicita verificación física de stock'
-        })
-      });
-
-      if (res.ok) {
-        showNotification?.(`✓ Recuento solicitado para ${selectedForRecount.length} productos.`, "success");
-        setSelectedForRecount([]);
-        setRecountReason('');
-        setIsRequestingRecount(false);
-        await fetchSessionItems(activeSession.id);
-      } else {
-        const err = await res.json();
-        showNotification?.(`Error al solicitar recuento: ${err.error}`, "error");
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsLoading(false);
-    }
+  const handleSetStockToSystem = (item: CountItem) => {
+    const sys = item.system_stock ?? item.live_stock ?? 0;
+    handleUpdateItem(item.id, { counted_stock: sys, is_checked: 1 });
   };
 
-  const fetchProductMovements = async (productId: number) => {
-    setLoadingMovements(prev => ({ ...prev, [productId]: true }));
-    try {
-      const res = await fetch(`/api/products/${productId}/stock-history`);
-      if (res.ok) {
-        const data = await res.json();
-        setMovementsByProduct(prev => ({ ...prev, [productId]: data }));
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoadingMovements(prev => ({ ...prev, [productId]: false }));
+  const handleMatchAllPending = async () => {
+    if (!confirm("¿Deseas marcar todos los productos pendientes con su cantidad exacta del sistema?")) return;
+    const pending = sessionItems.filter(it => it.is_checked === 0);
+    for (const item of pending) {
+      const sys = item.system_stock ?? item.live_stock ?? 0;
+      await handleUpdateItem(item.id, { counted_stock: sys, is_checked: 1 });
     }
-  };
-
-  const toggleMovements = (item: CountItem) => {
-    const isExpanded = !!expandedMovements[item.product_id];
-    setExpandedMovements(prev => ({ ...prev, [item.product_id]: !isExpanded }));
-    if (!isExpanded) {
-      fetchProductMovements(item.product_id);
-    }
+    showNotification?.("✓ Todos los productos pendientes han sido verificados.", "success");
   };
 
   const handleCompleteSession = async () => {
@@ -412,7 +378,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
           }
         });
       } else {
-        showNotification?.("No se pudo completar la sesión de auditoría.", "error");
+        showNotification?.("No se pudo completar la sesión de control físico.", "error");
       }
     } catch (err) {
       console.error(err);
@@ -440,7 +406,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
       });
 
       if (res.ok) {
-        showNotification?.("✓ Ajustes físicos de inventario aprobados y aplicados correctamente en el almacén.", "success");
+        showNotification?.("✓ Ajustes físicos de inventario aprobados y aplicados correctamente.", "success");
         setAdminNotes('');
         await fetchActiveSession();
         await fetchProducts();
@@ -467,7 +433,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
 
   const handleCancelSession = async () => {
     if (!activeSession) return;
-    if (!confirm("¿Está seguro que desea cancelar esta sesión de auditoría? Se perderán permanentemente los registros no aprobados.")) return;
+    if (!confirm("¿Está seguro que desea cancelar esta sesión de control físico? Los cambios no guardados se descartarán.")) return;
     setIsLoading(true);
     try {
       const res = await fetch(`/api/inventory-counts/${activeSession.id}/status`, {
@@ -476,7 +442,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
         body: JSON.stringify({ status: 'cancelado' })
       });
       if (res.ok) {
-        showNotification?.("Sesión de auditoría cancelada.", "success");
+        showNotification?.("Sesión de auditoría cancelada.", "info");
         setActiveSession(null);
         setSessionItems([]);
       }
@@ -492,22 +458,21 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     fetchSessionItems(count.id, true);
   };
 
-  // Helper metrics
+  // Resumen y métricas
   const getDiscrepancySummary = (itemsList: CountItem[]) => {
     const totalItems = itemsList.length;
     const checkedItems = itemsList.filter(it => it.is_checked === 1).length;
     const pendingItems = totalItems - checkedItems;
     
-    // Only calculate diffs if system_stock is present (Admin reconciliation mode)
     const itemsWithSysStock = itemsList.filter(it => it.system_stock !== undefined);
     const hasAdminVisibility = itemsWithSysStock.length > 0;
 
     const productsWithDiff = hasAdminVisibility 
-      ? itemsList.filter(it => it.is_checked === 1 && it.counted_stock !== (it.adjusted_expected_quantity ?? it.system_stock)).length
+      ? itemsList.filter(it => it.is_checked === 1 && it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0)).length
       : 0;
 
     const totalSystemStock = hasAdminVisibility
-      ? itemsList.reduce((sum, it) => sum + (it.adjusted_expected_quantity ?? it.system_stock ?? 0), 0)
+      ? itemsList.reduce((sum, it) => sum + (it.system_stock ?? it.live_stock ?? 0), 0)
       : 0;
 
     const totalCountedStock = itemsList.reduce((sum, it) => sum + (it.is_checked === 1 ? it.counted_stock : 0), 0);
@@ -530,11 +495,11 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   const activeSummary = getDiscrepancySummary(sessionItems);
   const historicSummary = getDiscrepancySummary(historicItems);
 
-  // Filter items in active session
+  // Filtrado de productos en sesión activa
   const filteredItems = sessionItems.filter(it => {
     const cleanQuery = itemSearch.toLowerCase().replace(/^#/, '').trim();
     const searchTerms = cleanQuery.split(/\s+/).filter(Boolean);
-    const searchableText = `${it.product_id || ''} ${(it.product_name || '').toLowerCase()} ${(it.product_sku || '').toLowerCase()} ${(it.category || '').toLowerCase()}`;
+    const searchableText = `${it.product_id || ''} ${(it.product_name || '').toLowerCase()} ${(it.product_sku || '').toLowerCase()} ${(it.product_category || '').toLowerCase()}`;
     const matchesSearch = searchTerms.length === 0 || searchTerms.every(term => searchableText.includes(term));
     
     let matchesFilter = true;
@@ -543,9 +508,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
     } else if (activeFilter === 'revisados') {
       matchesFilter = it.is_checked === 1;
     } else if (activeFilter === 'diferencias' && activeSummary.hasAdminVisibility) {
-      matchesFilter = it.is_checked === 1 && it.counted_stock !== (it.adjusted_expected_quantity ?? it.system_stock);
-    } else if (activeFilter === 'recuento') {
-      matchesFilter = it.recount_requested === 1;
+      matchesFilter = it.is_checked === 1 && it.counted_stock !== (it.system_stock ?? it.live_stock ?? 0);
     }
 
     const matchesHideRevisados = !hideRevisados || it.is_checked === 0;
@@ -554,114 +517,143 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
   });
 
   return (
-      <div 
-        id="physical-count-screen"
-        className={embeddedMode 
-          ? "w-full h-full flex flex-col overflow-hidden bg-slate-50 dark:bg-[#0c111e] rounded-2xl border border-slate-200/80 dark:border-slate-850/60 select-none animate-in fade-in duration-200" 
-          : "fixed inset-0 z-[100] bg-slate-50 dark:bg-[#0c111e] w-screen h-screen flex flex-col overflow-hidden pointer-events-auto select-none animate-in fade-in duration-200"
-        }
-      >
+    <div 
+      id="physical-count-screen"
+      className={embeddedMode 
+        ? "w-full h-full flex flex-col overflow-hidden bg-slate-50 dark:bg-[#090e1a] select-none" 
+        : "fixed inset-0 z-[100] bg-slate-900/70 backdrop-blur-md flex flex-col md:items-center md:justify-center overflow-hidden p-0 md:p-4 select-none"
+      }
+    >
+      
+      {/* CONTENEDOR PRINCIPAL */}
+      <div className={embeddedMode 
+        ? "w-full h-full flex flex-col overflow-hidden" 
+        : "w-full h-full md:max-w-5xl md:h-[94vh] flex flex-col bg-white dark:bg-[#0d1424] md:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+      }>
         
-        {/* ENCABEZADO */}
-        <div className="p-4 md:p-5 border-b border-slate-200 dark:border-slate-800/80 flex justify-between items-center bg-white dark:bg-[#0f1626] shrink-0 select-none">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-xl shrink-0">
-              <ShieldCheck size={22} />
+        {/* CABECERA PRINCIPAL */}
+        <header className="px-4 py-3.5 md:px-6 md:py-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0f172a] flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+              <ClipboardCheck size={22} />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="font-extrabold text-sm md:text-base text-slate-850 dark:text-white uppercase tracking-tight leading-none">
-                  Control Físico & Auditoría
-                  {activeSession 
-                    ? (activeSession.mode === 'BLIND' ? (isAdmin ? ' (Vista Administrador)' : ' a Ciegas') : ' (Con Visibilidad)')
-                    : (isBlindMode ? ' a Ciegas' : ' (Con Visibilidad)')}
-                </h3>
-                {activeSession?.mode === 'BLIND' ? (
-                  <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border border-indigo-500/20">
-                    {isAdmin ? 'A Ciegas (Visibilidad Admin Activada)' : 'A Ciegas (Sin Sesgo)'}
-                  </span>
-                ) : (
-                  <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border border-emerald-500/20">
-                    Con Visibilidad de Stock
-                  </span>
-                )}
+                <h2 className="text-sm md:text-base font-black text-slate-800 dark:text-white tracking-tight uppercase truncate">
+                  Control Físico de Inventario
+                </h2>
+                {activeSession ? (
+                  activeSession.mode === 'BLIND' ? (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                      {isAdmin ? 'Auditoría a Ciegas (Admin)' : 'Auditoría a Ciegas'}
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                      Stock Visible (POS)
+                    </span>
+                  )
+                ) : null}
               </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-1 leading-none">
-                {activeSession?.mode === 'BLIND' 
-                  ? (isAdmin 
-                      ? 'Supervisando auditoría a ciegas con cantidades esperadas visibles para el administrador.' 
-                      : 'El stock registrado se oculta al auditor durante el conteo para garantizar máxima integridad.')
-                  : 'Modo administrativo: visualizando cantidades esperadas en sistema.'}
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium truncate">
+                {activeSession 
+                  ? `Sesión #${activeSession.id} en ${activeSession.store_name || 'Almacén Principal'} | Auditor: ${activeSession.auditor_name || activeSession.username}`
+                  : 'Auditoría y conciliación física con existencias en tiempo real'}
               </p>
             </div>
           </div>
-          <button 
-            id="btn-close-physical-count"
-            onClick={onClose} 
-            className="text-slate-400 hover:text-slate-650 dark:hover:text-white p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-850 transition cursor-pointer shrink-0"
-          >
-            <X size={20} />
-          </button>
-        </div>
 
-        {/* PESTAÑAS (Activo / Histórico) */}
-        <div className="px-4 md:px-5 flex gap-1 border-b border-slate-200 dark:border-slate-800/40 bg-white/60 dark:bg-black/10 py-1.5 shrink-0 select-none">
-          <button
-            onClick={() => { setActiveTab('activo'); setSelectedHistoricCount(null); }}
-            className={`px-4 py-2 text-[10.5px] uppercase tracking-wider font-black rounded-xl transition flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'activo' 
-                ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400' 
-                : 'text-slate-450 hover:text-slate-700 dark:hover:text-slate-200'
-            }`}
-          >
-            <Play size={13} />
-            Sesión de Conteo Activa
-          </button>
-          <button
-            onClick={() => { setActiveTab('historico'); setSelectedHistoricCount(null); }}
-            className={`px-4 py-2 text-[10.5px] uppercase tracking-wider font-black rounded-xl transition flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'historico' 
-                ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-400' 
-                : 'text-slate-450 hover:text-slate-700 dark:hover:text-slate-200'
-            }`}
-          >
-            <Clock size={13} />
-            Historial de Auditorías
-          </button>
-        </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleManualRefresh}
+              disabled={isRefreshing}
+              title="Sincronizar existencias del POS"
+              className="p-2 rounded-xl text-slate-450 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+            >
+              <RefreshCw size={17} className={isRefreshing ? "animate-spin text-indigo-500" : ""} />
+            </button>
+            {onClose && (
+              <button 
+                id="btn-close-physical-count"
+                type="button"
+                onClick={onClose} 
+                className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            )}
+          </div>
+        </header>
 
-        {/* CONTENIDO PRINCIPAL */}
-        <div className="flex-1 overflow-y-auto min-h-0 flex flex-col p-4 md:p-5 gap-4">
+        {/* BARRA DE PESTAÑAS */}
+        <nav className="px-4 md:px-6 py-2 bg-slate-50 dark:bg-black/20 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => { setActiveTab('activo'); setSelectedHistoricCount(null); }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
+                activeTab === 'activo'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800/60'
+              }`}
+            >
+              <Play size={12} />
+              <span>Sesión Activa</span>
+              {activeSession && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setActiveTab('historico'); setSelectedHistoricCount(null); }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
+                activeTab === 'historico'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800/60'
+              }`}
+            >
+              <Clock size={12} />
+              <span>Historial ({historicalCounts.length})</span>
+            </button>
+          </div>
+
+          {activeSession && activeTab === 'activo' && activeSession.status !== 'completado' && (
+            <div className="hidden sm:flex items-center gap-2 text-xs font-bold text-slate-500 dark:text-slate-400">
+              <span className="font-mono text-emerald-500">{activeSummary.completedPercent}%</span>
+              <span>completado</span>
+            </div>
+          )}
+        </nav>
+
+        {/* ÁREA DE CONTENIDO */}
+        <div className="flex-1 overflow-y-auto p-3.5 md:p-6 flex flex-col gap-4">
           
           {activeTab === 'activo' && (
             <div className="flex-1 flex flex-col gap-4 min-h-0">
               
-              {/* FORMULARIO DE INICIO (SI NO HAY SESIÓN ACTIVA) */}
+              {/* 1. FORMULARIO PARA INICIAR SESIÓN CUANDO NO HAY SESIÓN ACTIVA */}
               {!activeSession && (
-                <div className="flex-1 flex flex-col items-center justify-center p-6 md:p-10 bg-white dark:bg-[#101726]/40 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl gap-5">
-                  <div className="p-4 bg-indigo-500/10 text-indigo-500 rounded-full">
-                    <ShieldCheck size={48} />
+                <div className="max-w-xl mx-auto w-full my-auto flex flex-col items-center text-center p-6 md:p-8 bg-white dark:bg-[#11192e] rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl gap-5">
+                  <div className="w-16 h-16 rounded-3xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                    <ShieldCheck size={36} />
                   </div>
-                  <div className="max-w-lg text-center">
-                    <h4 className="font-extrabold text-base md:text-lg text-slate-800 dark:text-slate-200 uppercase tracking-wide">
-                      Iniciar Control Físico de Inventario{isBlindMode ? ' a Ciegas' : ''}
-                    </h4>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 font-medium leading-relaxed">
-                      {isBlindMode
-                        ? 'Auditoría sin sesgo de confirmación. El personal cuenta las unidades reales en anaquel sin visualizar la cantidad que el sistema espera.'
-                        : 'El personal administrativo verifica el inventario con visibilidad completa de las cantidades registradas en el sistema.'}
+                  <div>
+                    <h3 className="text-lg md:text-xl font-black text-slate-850 dark:text-white uppercase tracking-tight">
+                      Comenzar Control Físico de Inventario
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium leading-relaxed">
+                      Verifica las existencias reales en anaqueles y estantes sincronizadas al instante con el Punto de Venta.
                     </p>
                   </div>
 
-                  <div className="bg-white dark:bg-[#11192e] p-6 rounded-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full flex flex-col gap-4 shadow-sm">
-                    
-                    {/* Almacén o Sucursal */}
-                    <div className="flex flex-col gap-1.5 text-left">
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Ubicación / Almacén:</label>
+                  <div className="w-full flex flex-col gap-3.5 text-left">
+                    {/* Almacén */}
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Ubicación / Almacén</label>
                       <select
                         value={storeName}
                         onChange={e => setStoreName(e.target.value)}
-                        className="text-xs font-bold p-3 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#151f32] text-slate-850 dark:text-white rounded-xl focus:outline-none focus:border-indigo-500"
+                        className="w-full mt-1 p-3 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                       >
                         <option value="Almacén Principal">Almacén Principal</option>
                         <option value="Sucursal Centro">Sucursal Centro</option>
@@ -669,217 +661,186 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                       </select>
                     </div>
 
-                    {/* Nombre del Auditor */}
-                    <div className="flex flex-col gap-1.5 text-left">
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Auditor Responsable (Obligatorio):</label>
+                    {/* Auditor */}
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Auditor Responsable</label>
                       <input
                         type="text"
                         value={auditorName}
                         onChange={e => setAuditorName(e.target.value)}
-                        placeholder="Ej. Juan Pérez (Auditor Externo)"
-                        className="text-xs font-bold p-3 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#151f32] text-slate-850 dark:text-white rounded-xl focus:outline-none focus:border-indigo-500"
+                        placeholder="Ej. Juan Pérez"
+                        className="w-full mt-1 p-3 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                       />
                     </div>
 
                     {/* Alcance de Categorías */}
-                    <div className="flex flex-col gap-1.5 text-left">
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Alcance del conteo:</label>
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Alcance de Auditoría</label>
                       <select
                         value={selectedCategory}
                         onChange={e => setSelectedCategory(e.target.value)}
-                        className="text-xs font-bold p-3 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#151f32] text-slate-850 dark:text-white rounded-xl focus:outline-none focus:border-indigo-500"
+                        className="w-full mt-1 p-3 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                       >
-                        <option value="Todos">Todos los productos (Auditoría Integral)</option>
+                        <option value="Todos">Todos los productos ({products?.length || 0} artículos)</option>
                         {categories.map(cat => (
                           <option key={cat} value={cat}>{cat.toUpperCase()}</option>
                         ))}
                       </select>
                     </div>
 
-                    {/* Seleccion de Modo (Estándar vs Ciegas) */}
-                    <div className="flex flex-col gap-1.5 text-left">
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Modo de Control Físico:</label>
-                      <div className="grid grid-cols-2 gap-2">
+                    {/* Selector de Modo */}
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Modo de Control</label>
+                      <div className="grid grid-cols-2 gap-2 mt-1">
                         <button
                           type="button"
                           onClick={() => setIsBlindMode(false)}
-                          className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition cursor-pointer ${
-                            !isBlindMode 
-                              ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-300 font-extrabold' 
-                              : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
+                          className={`p-3 rounded-2xl border text-left flex flex-col gap-1 transition cursor-pointer ${
+                            !isBlindMode
+                              ? 'bg-emerald-500/10 border-emerald-500 text-emerald-800 dark:text-emerald-300 ring-2 ring-emerald-500/20'
+                              : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500'
                           }`}
                         >
-                          <span className="text-xs font-bold uppercase">Con Cantidades Reales</span>
-                          <span className="text-[9.5px] font-medium opacity-80">Muestra stock del sistema (Administración)</span>
+                          <span className="text-xs font-black uppercase flex items-center gap-1.5">
+                            <Eye size={14} className="text-emerald-500" />
+                            Stock Visible
+                          </span>
+                          <span className="text-[9.5px] font-medium opacity-80 leading-tight">Muestra el stock real del POS para comparar</span>
                         </button>
+
                         <button
                           type="button"
                           onClick={() => setIsBlindMode(true)}
-                          className={`p-3 rounded-xl border text-left flex flex-col gap-1 transition cursor-pointer ${
-                            isBlindMode 
-                              ? 'bg-indigo-500/10 border-indigo-500 text-indigo-800 dark:text-indigo-300 font-extrabold' 
-                              : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
+                          className={`p-3 rounded-2xl border text-left flex flex-col gap-1 transition cursor-pointer ${
+                            isBlindMode
+                              ? 'bg-indigo-500/10 border-indigo-500 text-indigo-800 dark:text-indigo-300 ring-2 ring-indigo-500/20'
+                              : 'bg-slate-50 dark:bg-[#151f32] border-slate-200 dark:border-slate-800 text-slate-500'
                           }`}
                         >
-                          <span className="text-xs font-bold uppercase">Auditoría a Ciegas</span>
-                          <span className="text-[9.5px] font-medium opacity-80">Oculta stock esperado (Trabajadores)</span>
+                          <span className="text-xs font-black uppercase flex items-center gap-1.5">
+                            <ShieldCheck size={14} className="text-indigo-500" />
+                            A Ciegas
+                          </span>
+                          <span className="text-[9.5px] font-medium opacity-80 leading-tight">Oculta las existencias para evitar sesgos</span>
                         </button>
                       </div>
                     </div>
 
-                    {/* Advertencia de Segregación de Funciones (Solo si aplica a trabajador) */}
+                    {/* Advertencia de Segregación */}
                     {segregationWarning && !isAdmin && (
-                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex flex-col gap-2 text-left">
-                        <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs font-extrabold">
-                          <ShieldAlert size={16} className="shrink-0" />
-                          <span>Conflicto de Segregación de Funciones</span>
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2 text-amber-700 dark:text-amber-300 text-xs">
+                        <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-500" />
+                        <div>
+                          <span className="font-bold block">Verificación de Responsabilidad</span>
+                          <p className="text-[10px] mt-0.5">{segregationWarning}</p>
                         </div>
-                        <p className="text-[10px] text-slate-600 dark:text-slate-300 leading-relaxed font-medium">
-                          {segregationWarning}
-                        </p>
                       </div>
                     )}
 
                     <button
+                      type="button"
                       onClick={handleStartSession}
                       disabled={isLoading}
-                      className={`w-full py-3.5 hover:bg-opacity-90 text-white font-extrabold text-xs uppercase rounded-xl tracking-wider shadow-lg transition active:scale-98 cursor-pointer select-none mt-1 ${
-                        isBlindMode ? 'bg-indigo-600' : 'bg-emerald-600'
+                      className={`w-full mt-2 py-3.5 px-4 text-white font-black text-xs uppercase rounded-xl tracking-wider shadow-lg transition active:scale-98 cursor-pointer flex items-center justify-center gap-2 ${
+                        isBlindMode ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-500/20' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'
                       }`}
                     >
-                      {isLoading ? 'Iniciando Auditoría...' : (isBlindMode ? 'Iniciar Auditoría a Ciegas' : 'Iniciar Auditoría')}
+                      <Play size={14} />
+                      <span>{isLoading ? 'Iniciando...' : 'Iniciar Sesión de Control Físico'}</span>
                     </button>
                   </div>
                 </div>
               )}
 
-              {/* SESIÓN ENVIADA POR AUDITOR (RECONCILIACIÓN ADMINISTRATIVA) */}
+              {/* 2. RECONCILIACIÓN FINAL (ADMIN REVIEW) */}
               {activeSession && activeSession.status === 'completado' && (
-                <div className="flex-1 flex flex-col gap-5 max-w-4xl mx-auto w-full select-none">
-                  
+                <div className="max-w-4xl mx-auto w-full flex flex-col gap-4">
                   {!isAdmin ? (
-                    /* TRABAJADOR: MENSAJE DE ESPERA */
-                    <div className="bg-white dark:bg-[#11192e] p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col items-center text-center gap-5 w-full">
-                      <div className={`p-4 rounded-full ${activeSession.mode === 'BLIND' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-blue-500/10 text-blue-500'}`}>
-                        <CheckCircle size={44} />
+                    <div className="bg-white dark:bg-[#11192e] p-8 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl text-center flex flex-col items-center gap-4">
+                      <div className="w-16 h-16 rounded-full bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
+                        <CheckCircle size={36} />
                       </div>
-                      <div>
-                        <h4 className="font-extrabold text-base md:text-lg text-slate-850 dark:text-white uppercase tracking-tight">
-                          {activeSession.mode === 'BLIND' ? 'Conteo a Ciegas Enviado a Reconciliación' : 'Auditoría Finalizada con Éxito'}
-                        </h4>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium max-w-sm mx-auto leading-relaxed">
-                          {activeSession.mode === 'BLIND' 
-                            ? 'La auditoría finalizó correctamente. Los resultados físicos se encuentran bajo revisión del Administrador o Propietario.'
-                            : 'El conteo físico ha concluido y las cantidades ingresadas ya están aplicadas al inventario general.'}
-                        </p>
-                      </div>
-
-                      <div className="w-full flex gap-3 mt-2">
+                      <h3 className="text-lg font-black text-slate-850 dark:text-white uppercase">
+                        Conteo Finalizado y Enviado
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md">
+                        Tu conteo físico ha sido registrado exitosamente y está listo para la revisión y aprobación por el Administrador.
+                      </p>
+                      {onClose && (
                         <button
+                          type="button"
                           onClick={onClose}
-                          className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 dark:text-white text-slate-700 font-extrabold text-xs uppercase rounded-xl transition cursor-pointer"
+                          className="px-6 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl"
                         >
                           Cerrar Pantalla
                         </button>
-                      </div>
+                      )}
                     </div>
                   ) : (
-                    
-                    /* ADMINISTRADOR: PANEL DE RECONCILIACIÓN Y MATRIZ DE COMPARACIÓN CON MOVIMIENTOS */
-                    <div className="bg-white dark:bg-[#11192e] p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-5 w-full">
-                      
-                      <div className="flex items-center justify-between border-b border-slate-150 dark:border-slate-800 pb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2.5 bg-amber-500/10 text-amber-600 rounded-xl">
-                            <ShieldAlert size={24} />
-                          </div>
-                          <div>
-                            <h4 className="font-extrabold text-sm md:text-base text-slate-850 dark:text-white uppercase tracking-tight">
-                              Reconciliación y Aprobación de Auditoría Físico
-                            </h4>
-                            <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-0.5">
-                              Auditor: <span className="text-indigo-600 dark:text-indigo-400 font-bold">{activeSession.auditor_name || activeSession.username}</span> | Ubicación: <span className="text-slate-700 dark:text-slate-200 font-bold">{activeSession.store_name || 'Almacén Principal'}</span>
-                            </p>
-                          </div>
-                        </div>
-
-                        {activeSession.override_segregation === 1 && (
-                          <div className="px-3 py-1 bg-amber-500/10 text-amber-600 border border-amber-500/20 rounded-xl text-[9px] uppercase font-black tracking-wider">
-                            ⚠️ Auto-Auditoría Excepcional
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Métricas Generales */}
-                      <div className="grid grid-cols-4 gap-2 bg-slate-50 dark:bg-black/35 p-3.5 rounded-2xl border border-slate-200/60 dark:border-slate-800 text-center">
+                    <div className="bg-white dark:bg-[#11192e] p-5 md:p-7 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xl flex flex-col gap-4">
+                      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
                         <div>
-                          <span className="text-[8px] font-black uppercase text-slate-400">Total Productos</span>
-                          <div className="font-mono font-bold text-xs text-slate-800 dark:text-slate-200 mt-1">{activeSummary.totalItems}</div>
+                          <h3 className="text-base font-black text-slate-800 dark:text-white uppercase tracking-tight">
+                            Reconciliación y Aprobación de Inventario
+                          </h3>
+                          <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
+                            Auditor: <strong className="text-indigo-600 dark:text-indigo-400">{activeSession.auditor_name || activeSession.username}</strong>
+                          </p>
                         </div>
-                        <div>
-                          <span className="text-[8px] font-black uppercase text-slate-400">Coincidencias</span>
-                          <div className="font-mono font-bold text-xs text-emerald-500 mt-1">
-                            {sessionItems.filter(it => it.counted_stock === (it.adjusted_expected_quantity ?? it.system_stock)).length}
-                          </div>
-                        </div>
-                        <div>
-                          <span className="text-[8px] font-black uppercase text-slate-400">Con Discrepancia</span>
-                          <div className="font-mono font-bold text-xs text-rose-500 mt-1">{activeSummary.productsWithDiff}</div>
-                        </div>
-                        <div>
-                          <span className="text-[8px] font-black uppercase text-slate-400">Diferencia Neta</span>
-                          <div className={`font-mono font-bold text-xs mt-1 ${activeSummary.totalDiscrepancyUnits >= 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
-                            {activeSummary.totalDiscrepancyUnits > 0 ? `+${activeSummary.totalDiscrepancyUnits}` : activeSummary.totalDiscrepancyUnits} pz
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Tabla de Reconciliación Detallada */}
-                      <div className="flex flex-col gap-2">
-                        <span className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 pl-1">
-                          Comparativa: Stock Inicial Snapshot vs Movimientos vs Conteo Físico Real:
+                        <span className="px-3 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs font-black uppercase rounded-xl border border-amber-500/20">
+                          Pendiente de Aprobación
                         </span>
+                      </div>
 
-                        <div className="max-h-[300px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-2xl divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-black/10">
+                      {/* Métricas de Reconciliación */}
+                      <div className="grid grid-cols-4 gap-2 bg-slate-50 dark:bg-black/30 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 text-center">
+                        <div>
+                          <span className="text-[9px] font-black uppercase text-slate-400 block">Total Artículos</span>
+                          <span className="text-sm font-mono font-bold text-slate-800 dark:text-white">{activeSummary.totalItems}</span>
+                        </div>
+                        <div>
+                          <span className="text-[9px] font-black uppercase text-slate-400 block">Coincidentes</span>
+                          <span className="text-sm font-mono font-bold text-emerald-500">
+                            {sessionItems.filter(it => it.counted_stock === (it.system_stock ?? it.live_stock ?? 0)).length}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[9px] font-black uppercase text-slate-400 block">Con Diferencia</span>
+                          <span className="text-sm font-mono font-bold text-rose-500">{activeSummary.productsWithDiff}</span>
+                        </div>
+                        <div>
+                          <span className="text-[9px] font-black uppercase text-slate-400 block">Diferencia Neta</span>
+                          <span className={`text-sm font-mono font-bold ${activeSummary.totalDiscrepancyUnits >= 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                            {activeSummary.totalDiscrepancyUnits > 0 ? `+${activeSummary.totalDiscrepancyUnits}` : activeSummary.totalDiscrepancyUnits} pz
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Lista de discrepancias */}
+                      <div className="flex flex-col gap-2">
+                        <span className="text-xs font-black uppercase text-slate-400 tracking-wider">
+                          Detalle Comparativo de Existencias:
+                        </span>
+                        <div className="max-h-[320px] overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-2xl divide-y divide-slate-100 dark:divide-slate-800">
                           {sessionItems.map(it => {
-                            const snapshot = it.expected_quantity_snapshot ?? it.system_stock ?? 0;
-                            const movements = it.movements_during_count ?? 0;
-                            const adjustedExp = it.adjusted_expected_quantity ?? (snapshot + movements);
+                            const sys = it.system_stock ?? it.live_stock ?? 0;
                             const physical = it.counted_stock ?? 0;
-                            const diff = physical - adjustedExp;
+                            const diff = physical - sys;
 
                             return (
-                              <div key={it.id} className="p-3.5 flex items-center justify-between text-xs gap-3">
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-extrabold text-slate-800 dark:text-slate-200 uppercase truncate">
-                                    {it.product_name}
-                                  </div>
-                                  <div className="flex items-center gap-2 text-[9.5px] text-slate-450 dark:text-slate-400 font-mono mt-0.5">
-                                    <span>SKU: {it.product_sku || 'N/A'}</span>
-                                    {movements !== 0 && (
-                                      <span className="px-1.5 py-0.5 bg-amber-500/10 text-amber-600 border border-amber-500/20 rounded font-bold">
-                                        ⚡ Movs durante auditoría: {movements > 0 ? `+${movements}` : movements}
-                                      </span>
-                                    )}
-                                  </div>
+                              <div key={it.id} className="p-3 flex items-center justify-between text-xs gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-black text-slate-800 dark:text-white uppercase truncate">{it.product_name}</div>
+                                  <div className="text-[10px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
                                 </div>
-
-                                {/* Comparison Breakdown */}
-                                <div className="flex items-center gap-4 text-right shrink-0">
-                                  <div className="text-[10px] font-mono text-slate-500">
-                                    <div>Snapshot: <span className="font-bold text-slate-700 dark:text-slate-300">{snapshot}</span></div>
-                                    <div>Ajustado: <span className="font-bold text-slate-700 dark:text-slate-300">{adjustedExp}</span></div>
-                                  </div>
-                                  
-                                  <div className="text-[11px] font-mono font-bold text-slate-850 dark:text-white px-2.5 py-1 bg-slate-100 dark:bg-slate-850 rounded-lg">
+                                <div className="flex items-center gap-3 shrink-0 text-right font-mono">
+                                  <span className="text-[11px] text-slate-500">POS: <strong>{sys}</strong></span>
+                                  <span className="text-[11px] px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-bold text-slate-800 dark:text-white">
                                     Físico: {physical}
-                                  </div>
-
-                                  <div className={`text-xs font-mono font-black w-20 text-right ${
-                                    diff === 0 ? 'text-emerald-500' : diff > 0 ? 'text-indigo-500' : 'text-rose-500'
-                                  }`}>
-                                    {diff === 0 ? '✓ 0' : diff > 0 ? `+${diff}` : `${diff}`} pz
-                                  </div>
+                                  </span>
+                                  <span className={`text-xs font-black w-16 text-right ${diff === 0 ? 'text-emerald-500' : diff > 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                                    {diff === 0 ? '0 u' : diff > 0 ? `+${diff} u` : `${diff} u`}
+                                  </span>
                                 </div>
                               </div>
                             );
@@ -887,323 +848,325 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                         </div>
                       </div>
 
-                      {/* Observaciones de la Conciliación */}
-                      <div className="flex flex-col gap-1.5 text-left">
-                        <label className="text-[9.5px] font-black uppercase tracking-wider text-slate-400">Observaciones Finales de la Conciliación:</label>
+                      {/* Observaciones y Aprobación */}
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-[10px] font-black uppercase text-slate-400">Observaciones del Ajuste</label>
                         <input
                           type="text"
-                          placeholder="Notas de aprobación y ajustes de inventario..."
                           value={adminNotes}
                           onChange={e => setAdminNotes(e.target.value)}
-                          className="text-xs p-3 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white rounded-xl focus:outline-none focus:border-indigo-500 w-full"
+                          placeholder="Notas de conciliación..."
+                          className="p-3 text-xs bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                         />
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 mt-1">
                         <button
+                          type="button"
                           onClick={handleCancelSession}
-                          className="py-3.5 bg-rose-500/5 hover:bg-rose-500/10 border border-rose-500/20 text-rose-600 font-extrabold text-xs uppercase rounded-xl transition cursor-pointer"
+                          className="py-3 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 font-bold text-xs uppercase rounded-xl transition cursor-pointer"
                         >
                           Rechazar Conteo
                         </button>
                         <button
+                          type="button"
                           onClick={handleApproveCount}
                           disabled={isLoading}
-                          className="py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs uppercase rounded-xl transition shadow-lg shadow-emerald-650/10 cursor-pointer"
+                          className="py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase rounded-xl transition shadow-lg shadow-emerald-500/20 cursor-pointer"
                         >
-                          {isLoading ? 'Guardando...' : 'Aprobar & Reconciliar Stock'}
+                          {isLoading ? 'Aplicando...' : 'Aprobar y Conciliar Stock'}
                         </button>
                       </div>
-
                     </div>
                   )}
-
                 </div>
               )}
 
-              {/* SESIÓN EN PROGRESO (AUDITORIA ACTIVA EN CAMPO) */}
+              {/* 3. SESIÓN EN CURSO (AUDITORÍA ACTIVA) */}
               {activeSession && activeSession.status !== 'completado' && (
-                <div className="flex-1 flex flex-col gap-4 min-h-0">
+                <div className="flex-1 flex flex-col gap-3 min-h-0">
                   
-                  {/* BARRA DE INFORMACIÓN DE AUDITORÍA Y PROGRESO */}
-                  <div className="bg-white dark:bg-[#101726]/70 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 shrink-0 shadow-sm select-none">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600 dark:text-indigo-400">
-                            Auditoría Físico Activa #{activeSession.id}
-                          </span>
-                          <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-[9px] font-black uppercase rounded text-slate-600 dark:text-slate-300">
-                            {activeSession.store_name || 'Almacén Principal'}
-                          </span>
-                        </div>
-                        <div className="flex items-baseline gap-2 mt-1">
-                          <span className="text-lg font-black text-indigo-600 dark:text-indigo-400">{activeSummary.checkedItems}</span>
-                          <span className="text-xs font-bold text-slate-450 dark:text-slate-400">de {activeSummary.totalItems} productos verificados</span>
-                        </div>
+                  {/* BARRA DE PROGRESO COMPACTA */}
+                  <div className="bg-white dark:bg-[#101726] rounded-2xl border border-slate-200 dark:border-slate-800 p-3.5 shadow-xs shrink-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-slate-800 dark:text-white uppercase">
+                          Avance del Conteo:
+                        </span>
+                        <span className="font-mono text-xs font-black text-indigo-600 dark:text-indigo-400">
+                          {activeSummary.checkedItems} de {activeSummary.totalItems} ({activeSummary.completedPercent}%)
+                        </span>
                       </div>
 
-                      {/* Stat Grid */}
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 bg-slate-50 dark:bg-black/20 px-3.5 py-2 rounded-xl border border-slate-150/60 dark:border-slate-850">
-                        <div>
-                          <span className="text-[8px] font-black uppercase text-slate-400 block leading-none">Auditor</span>
-                          <span className="font-bold text-xs text-slate-750 dark:text-slate-200 block mt-1 truncate">
-                            {activeSession.auditor_name || activeSession.username}
+                      <div className="flex items-center gap-2">
+                        <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                          Pendientes: {activeSummary.pendingItems}
+                        </span>
+                        {activeSummary.hasAdminVisibility && activeSummary.productsWithDiff > 0 && (
+                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
+                            Diferencias: {activeSummary.productsWithDiff}
                           </span>
-                        </div>
-                        <div>
-                          <span className="text-[8px] font-black uppercase text-slate-400 block leading-none">Pendientes</span>
-                          <span className="font-mono font-bold text-xs text-amber-500 block mt-1">{activeSummary.pendingItems} pz</span>
-                        </div>
-                        <div className="col-span-2 md:col-span-1">
-                          <span className="text-[8px] font-black uppercase text-slate-400 block leading-none">Avance</span>
-                          <span className="font-mono font-black text-xs text-emerald-500 block mt-1">{activeSummary.completedPercent}%</span>
-                        </div>
+                        )}
+                        {isAdmin && activeSummary.pendingItems > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleMatchAllPending}
+                            className="hidden sm:inline-flex px-2.5 py-1 rounded-lg text-[10px] font-black uppercase bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition cursor-pointer"
+                          >
+                            ✓ Igualar Pendientes con POS
+                          </button>
+                        )}
                       </div>
                     </div>
 
-                    {/* Barra de progreso visual */}
-                    <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mt-3">
+                    {/* Barra de progreso */}
+                    <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mt-2.5">
                       <div 
-                        className="h-full bg-emerald-500 transition-all duration-300"
+                        className="h-full bg-emerald-500 transition-all duration-300 rounded-full"
                         style={{ width: `${activeSummary.completedPercent}%` }}
                       />
                     </div>
                   </div>
 
-                  {/* FILTROS Y BUSCADOR */}
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0 select-none bg-white dark:bg-[#101726]/40 p-3 rounded-2xl border border-slate-200/60 dark:border-slate-800">
-                    <div className="relative w-full md:max-w-xs">
+                  {/* BUSCADOR Y FILTROS */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0 bg-white dark:bg-[#101726] p-2.5 rounded-2xl border border-slate-200 dark:border-slate-800">
+                    <div className="relative flex-1">
                       <input
                         type="text"
-                        placeholder="Buscar por artículo, SKU, #ID o categoría..."
+                        value={itemSearch}
                         onChange={e => setItemSearch(e.target.value)}
-                        className="pl-9 pr-4 py-2 w-full bg-white dark:bg-[#151f32] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500 dark:text-white text-xs font-semibold h-10"
+                        placeholder="Buscar por artículo, SKU, #ID..."
+                        className="w-full pl-9 pr-8 py-2 text-xs font-bold bg-slate-50 dark:bg-[#151f32] text-slate-800 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
                         autoComplete="off"
                         spellCheck="false"
                       />
-                      <Search className="absolute left-3 top-3 text-slate-400" size={14} />
+                      <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
+                      {itemSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setItemSearch('')}
+                          className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
+                        type="button"
                         onClick={() => setActiveFilter('todos')}
-                        className={`px-3.5 py-1.5 rounded-xl text-[10px] uppercase font-black tracking-wider border cursor-pointer transition ${
+                        className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition cursor-pointer ${
                           activeFilter === 'todos'
-                            ? 'bg-indigo-650 text-white border-indigo-650'
-                            : 'bg-white dark:bg-[#151f32] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-850 hover:bg-slate-50'
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
                         }`}
                       >
                         Todos ({sessionItems.length})
                       </button>
                       <button
+                        type="button"
                         onClick={() => setActiveFilter('pendientes')}
-                        className={`px-3.5 py-1.5 rounded-xl text-[10px] uppercase font-black tracking-wider border cursor-pointer transition ${
+                        className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition cursor-pointer ${
                           activeFilter === 'pendientes'
-                            ? 'bg-indigo-650 text-white border-indigo-650'
-                            : 'bg-white dark:bg-[#151f32] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-850 hover:bg-slate-50'
+                            ? 'bg-amber-600 text-white'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
                         }`}
                       >
                         Pendientes ({activeSummary.pendingItems})
                       </button>
                       <button
+                        type="button"
                         onClick={() => setActiveFilter('revisados')}
-                        className={`px-3.5 py-1.5 rounded-xl text-[10px] uppercase font-black tracking-wider border cursor-pointer transition ${
+                        className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition cursor-pointer ${
                           activeFilter === 'revisados'
-                            ? 'bg-indigo-650 text-white border-indigo-650'
-                            : 'bg-white dark:bg-[#151f32] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-850 hover:bg-slate-50'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
                         }`}
                       >
                         Verificados ({activeSummary.checkedItems})
                       </button>
                       {activeSummary.hasAdminVisibility && (
                         <button
+                          type="button"
                           onClick={() => setActiveFilter('diferencias')}
-                          className={`px-3.5 py-1.5 rounded-xl text-[10px] uppercase font-black tracking-wider border cursor-pointer transition ${
+                          className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition cursor-pointer ${
                             activeFilter === 'diferencias'
-                              ? 'bg-amber-600 text-white border-amber-600'
-                              : 'bg-white dark:bg-[#151f32] text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-900/50 hover:bg-amber-50'
+                              ? 'bg-rose-600 text-white'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
                           }`}
                         >
                           Diferencias ({activeSummary.productsWithDiff})
                         </button>
                       )}
                     </div>
-
-                    <label className="flex items-center gap-2 text-[10.5px] font-black uppercase text-slate-500 dark:text-slate-400 cursor-pointer shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={hideRevisados}
-                        onChange={e => setHideRevisados(e.target.checked)}
-                        className="rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
-                      />
-                      <span>Ocultar ya contados</span>
-                    </label>
                   </div>
 
-                  {/* LISTADO DE PRODUCTOS PARA EL AUDITOR */}
-                  <div className="flex-1 overflow-y-auto min-h-[30vh] flex flex-col gap-3 pr-1 scrollbar-thin">
+                  {/* LISTADO DE PRODUCTOS OPTIMIZADO PARA PANTALLA Y MÓVIL */}
+                  <div className="flex-1 overflow-y-auto min-h-0 flex flex-col gap-2.5 pr-0.5">
                     {filteredItems.length === 0 ? (
-                      <div className="p-12 text-center text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-wide bg-white dark:bg-[#101726]/20 border border-slate-200 dark:border-slate-800 rounded-2xl select-none">
-                        Ningún producto coincide con el filtro actual.
+                      <div className="p-10 text-center text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-wide bg-white dark:bg-[#101726] border border-slate-200 dark:border-slate-800 rounded-2xl">
+                        No hay productos que coincidan con la búsqueda o filtro.
                       </div>
                     ) : (
                       filteredItems.map((it, idx) => {
                         const isChecked = it.is_checked === 1;
+                        const sysStock = it.system_stock ?? it.live_stock ?? 0;
+                        const physical = it.counted_stock ?? 0;
+                        const diff = physical - sysStock;
+                        const showStock = it.system_stock !== undefined;
 
                         return (
-                          <div 
+                          <div
                             key={it.id}
                             id={`product-card-${it.id}`}
-                            className={`bg-white dark:bg-[#11192e] rounded-2xl border p-4 md:p-5 flex flex-col gap-3.5 transition-all duration-250 select-none ${
-                              isChecked 
-                                ? 'border-emerald-500/40 bg-emerald-500/[0.02] dark:bg-emerald-500/[0.01]' 
-                                : 'border-slate-200 dark:border-slate-850 hover:border-slate-300 shadow-sm'
+                            className={`p-3.5 md:p-4 rounded-2xl border transition-all flex flex-col gap-2.5 ${
+                              isChecked
+                                ? 'bg-white dark:bg-[#11192e] border-emerald-500/40 shadow-xs'
+                                : 'bg-white dark:bg-[#11192e] border-slate-200 dark:border-slate-800 shadow-xs hover:border-indigo-500/40'
                             }`}
                           >
-                            <div className="flex justify-between items-center gap-2">
-                              <span className="text-[10px] font-mono text-slate-450 dark:text-slate-400 uppercase tracking-widest font-black">
-                                Producto {idx + 1} de {filteredItems.length}
-                              </span>
-                              <span className={`px-2.5 py-1 text-[9px] font-black uppercase rounded-lg border leading-none ${
-                                isChecked 
-                                  ? 'bg-emerald-100/80 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' 
-                                  : 'bg-slate-100 dark:bg-slate-900 text-slate-500 border-slate-200 dark:border-slate-800'
+                            {/* Fila 1: Tags y Estado */}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-mono font-bold text-slate-600 dark:text-slate-300">
+                                  #{it.product_id}
+                                </span>
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-[10px] font-mono text-slate-500 dark:text-slate-400">
+                                  SKU: {it.product_sku}
+                                </span>
+                                <span className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/40 text-[9px] font-black uppercase text-indigo-600 dark:text-indigo-400">
+                                  {it.product_category}
+                                </span>
+                              </div>
+
+                              <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-black uppercase border ${
+                                isChecked
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                  : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
                               }`}>
                                 {isChecked ? 'Verificado ✓' : 'Pendiente'}
                               </span>
                             </div>
 
-                            {/* Informes del producto */}
-                            <div className="flex flex-col">
-                              <h4 className="font-extrabold text-sm md:text-base text-slate-850 dark:text-white uppercase leading-tight tracking-tight break-words">
+                            {/* Fila 2: Nombre del Producto */}
+                            <div className="flex items-start justify-between gap-2">
+                              <h4 className="text-sm md:text-base font-black text-slate-850 dark:text-white uppercase leading-snug break-words flex-1">
                                 {it.product_name}
                               </h4>
-                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-1 font-semibold text-[10.5px]">
-                                <p className="text-slate-400 font-mono">
-                                  SKU: <span className="text-slate-700 dark:text-slate-200 font-bold">{it.product_sku || 'Sin SKU'}</span>
-                                </p>
-                                <span className="bg-slate-100 dark:bg-[#192239] px-2 py-0.5 rounded-md text-slate-500 dark:text-slate-400 uppercase text-[9px] font-black">
-                                  {it.product_category}
-                                </span>
-                              </div>
+                            </div>
 
-                              {it.recount_requested === 1 && (
-                                <div className="mt-2.5 p-2 bg-purple-500/10 border border-purple-500/20 text-purple-600 dark:text-purple-400 text-xs font-bold rounded-xl flex items-center gap-2">
-                                  <AlertOctagon size={16} />
-                                  <span>⚠️ Recuento solicitado por Administración. Por favor vuelve a contar este artículo en anaquel.</span>
+                            {/* Fila 3: Comparativa de Stock del Sistema (Visible en modo estándar o para Admin) */}
+                            {showStock && (
+                              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-black/30 border border-slate-200/80 dark:border-slate-800/80 text-xs">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-black uppercase text-slate-400">Stock POS / Sistema:</span>
+                                  <span className="font-mono font-black text-slate-800 dark:text-white px-2 py-0.5 bg-white dark:bg-slate-800 rounded-md border border-slate-200 dark:border-slate-700">
+                                    {sysStock} u
+                                  </span>
                                 </div>
-                              )}
-                            </div>
 
-                            {/* Control de entrada de Existencia Física (con visibilidad condicional) */}
-                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-50 dark:bg-black/20 p-3.5 rounded-xl border border-slate-150/60 dark:border-slate-850">
-                              <label className="text-[11px] font-black uppercase text-slate-700 dark:text-slate-300">
-                                Cantidad física en anaquel:
-                              </label>
-                              
-                              <div className="flex items-center gap-1.5 w-full md:max-w-[200px] flex-1">
-                                <button
-                                  type="button"
-                                  disabled={activeSession.status === 'completado'}
-                                  onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, it.counted_stock - 1) })}
-                                  className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-[#1a233a] border border-slate-200 dark:border-slate-800 text-slate-655 dark:text-slate-300 flex items-center justify-center font-extrabold text-lg hover:bg-slate-200 active:scale-95 transition shrink-0 select-none cursor-pointer disabled:opacity-50"
-                                >
-                                  -
-                                </button>
-                                <input
-                                  type="number"
-                                  disabled={activeSession.status === 'completado'}
-                                  value={it.counted_stock === null || it.counted_stock === undefined ? '' : it.counted_stock}
-                                  onFocus={e => e.target.select()}
-                                  onChange={e => {
-                                    const parsed = parseInt(e.target.value);
-                                    if (!isNaN(parsed) && parsed >= 0) {
-                                      handleUpdateItem(it.id, { counted_stock: parsed });
-                                    } else if (e.target.value === '') {
-                                      handleUpdateItem(it.id, { counted_stock: 0 });
-                                    }
-                                  }}
-                                  className="w-full text-center font-mono font-black py-2 rounded-xl border border-slate-200 dark:border-slate-800 focus:outline-none focus:border-indigo-500 text-slate-850 dark:text-white bg-white dark:bg-[#11192e] text-base h-12 select-text"
-                                />
-                                <button
-                                  type="button"
-                                  disabled={activeSession.status === 'completado'}
-                                  onClick={() => handleUpdateItem(it.id, { counted_stock: it.counted_stock + 1 })}
-                                  className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-[#1a233a] border border-slate-200 dark:border-slate-800 text-slate-655 dark:text-slate-300 flex items-center justify-center font-extrabold text-lg hover:bg-slate-200 active:scale-95 transition shrink-0 select-none cursor-pointer disabled:opacity-50"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-
-                            {/* Mostrar el stock original y la diferencia en tiempo real en modo no ciego O si el usuario es Admin/Propietario */}
-                            {(activeSession.mode !== 'BLIND' || isAdmin || it.system_stock !== undefined) && it.system_stock !== undefined && (() => {
-                              const sysStock = it.adjusted_expected_quantity ?? it.system_stock ?? 0;
-                              const diff = (it.counted_stock ?? 0) - sysStock;
-                              const isCounted = it.is_checked === 1;
-
-                              return (
-                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-indigo-50/70 dark:bg-indigo-950/30 px-3.5 py-2.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50 gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[10px] font-extrabold uppercase text-indigo-700 dark:text-indigo-400">Stock en sistema:</span>
-                                    <span className="text-xs font-mono font-black text-indigo-900 dark:text-indigo-200">{sysStock} pz</span>
+                                {isChecked && (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[10px] font-black uppercase text-slate-400">Diferencia:</span>
+                                    {diff === 0 ? (
+                                      <span className="px-2 py-0.5 rounded-md font-mono font-black text-[11px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                                        0 u (Conforme)
+                                      </span>
+                                    ) : diff > 0 ? (
+                                      <span className="px-2 py-0.5 rounded-md font-mono font-black text-[11px] bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                                        +{diff} u (Sobrante)
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-md font-mono font-black text-[11px] bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
+                                        {diff} u (Faltante)
+                                      </span>
+                                    )}
                                   </div>
-                                  
-                                  {isCounted && (
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-[10px] font-black uppercase text-slate-500 dark:text-slate-400">Diferencia:</span>
-                                      {diff === 0 ? (
-                                        <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-mono text-[11px] font-black rounded-md border border-emerald-500/20">
-                                          0 pz (Sin diferencia)
-                                        </span>
-                                      ) : diff < 0 ? (
-                                        <span className="px-2 py-0.5 bg-rose-500/10 text-rose-700 dark:text-rose-400 font-mono text-[11px] font-black rounded-md border border-rose-500/20">
-                                          {diff} pz (Faltante)
-                                        </span>
-                                      ) : (
-                                        <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 font-mono text-[11px] font-black rounded-md border border-indigo-500/20">
-                                          +{diff} pz (Sobrante)
-                                        </span>
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })()}
+                                )}
+                              </div>
+                            )}
 
-                            {/* Observación / Nota del Auditor */}
-                            <div className="flex flex-col gap-1 select-none">
-                              <label className="text-[9.5px] font-black uppercase tracking-wider text-slate-400 pl-0.5">Notas / Observaciones del auditor:</label>
-                              <input
-                                type="text"
-                                placeholder="Ej. empaque roto, producto vencido, en exhibición..."
-                                value={it.notes || ''}
-                                disabled={activeSession.status === 'completado'}
-                                onChange={e => handleUpdateItem(it.id, { notes: e.target.value })}
-                                className="text-xs p-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#11192e] rounded-xl text-slate-800 dark:text-white focus:outline-none focus:border-indigo-500 w-full"
-                              />
+                            {/* Fila 4: Control de Entrada Física (Stepper Touch-Friendly) */}
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+                              
+                              <div className="flex items-center gap-2 flex-1">
+                                <span className="text-xs font-black uppercase text-slate-700 dark:text-slate-300 shrink-0">
+                                  Físico en anaquel:
+                                </span>
+                                <div className="flex items-center gap-1.5 flex-1 max-w-[200px]">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1) })}
+                                    className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 font-black text-lg text-slate-700 dark:text-slate-200 flex items-center justify-center transition active:scale-95 cursor-pointer shrink-0"
+                                  >
+                                    -
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={it.counted_stock === null || it.counted_stock === undefined ? '' : it.counted_stock}
+                                    onFocus={e => e.target.select()}
+                                    onChange={e => {
+                                      const val = parseInt(e.target.value);
+                                      handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val) });
+                                    }}
+                                    className="w-full h-10 text-center font-mono font-black text-base bg-slate-50 dark:bg-[#151f32] text-slate-850 dark:text-white border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:border-indigo-500"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateItem(it.id, { counted_stock: physical + 1 })}
+                                    className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 font-black text-lg text-slate-700 dark:text-slate-200 flex items-center justify-center transition active:scale-95 cursor-pointer shrink-0"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Accesos rápidos de cantidad */}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {showStock && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetStockToSystem(it)}
+                                    className="px-2.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 text-[10px] font-black uppercase border border-indigo-200 dark:border-indigo-900 transition cursor-pointer"
+                                  >
+                                    = POS ({sysStock})
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: 0 })}
+                                  className="px-2 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 text-[10px] font-mono font-bold transition cursor-pointer"
+                                >
+                                  0 u
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateItem(it.id, { counted_stock: physical + 5 })}
+                                  className="px-2 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 text-[10px] font-mono font-bold transition cursor-pointer"
+                                >
+                                  +5
+                                </button>
+                              </div>
                             </div>
 
-                            {/* Botón de Confirmación Tactil */}
+                            {/* Botón de Confirmar / Guardar Conteo */}
                             <button
                               type="button"
-                              disabled={activeSession.status === 'completado'}
                               onClick={() => handleToggleCheck(it)}
-                              className={`w-full h-12 rounded-xl text-xs uppercase font-black tracking-widest transition-all active:scale-[0.99] cursor-pointer flex items-center justify-center gap-2 ${
-                                isChecked 
-                                  ? 'bg-slate-100 dark:bg-slate-850 text-slate-500 hover:bg-slate-200' 
-                                  : 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-md shadow-emerald-500/10'
+                              className={`w-full py-2.5 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition active:scale-98 cursor-pointer flex items-center justify-center gap-2 ${
+                                isChecked
+                                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20'
+                                  : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/10'
                               }`}
                             >
-                              {isChecked ? (
-                                <>
-                                  <Check size={16} />
-                                  <span>Contado y Guardado ✓ (Clic para editar)</span>
-                                </>
-                              ) : (
-                                <span>Marcar como contado</span>
-                              )}
+                              <Check size={14} />
+                              <span>
+                                {isChecked 
+                                  ? `✓ Guardado (${physical} u) - Clic para modificar` 
+                                  : `Marcar como Contado (${physical} u)`}
+                              </span>
                             </button>
 
                           </div>
@@ -1212,46 +1175,44 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                     )}
                   </div>
 
-                  {/* BARRAS DE ACCIONES FINALES */}
-                  <div className="border-t border-slate-200 dark:border-slate-850 pt-4 shrink-0 flex flex-col gap-3 select-none bg-slate-50 dark:bg-[#0c111e]">
-                    {activeSummary.pendingItems > 0 ? (
-                      <div className="flex items-center gap-2 p-3 bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 rounded-xl text-[11px] font-black uppercase">
-                        <AlertTriangle size={15} />
-                        <span>Faltan {activeSummary.pendingItems} productos por contar para poder concluir la auditoría.</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 rounded-xl text-[11px] font-black uppercase">
-                        <CheckCircle size={15} />
-                        <span>¡Todos los productos han sido auditados! Puedes concluir y enviar a reconciliación.</span>
-                      </div>
-                    )}
-
-                    <div className="flex flex-col sm:flex-row gap-3">
+                  {/* BARRA INFERIOR DE ACCIONES */}
+                  <div className="p-3 bg-white dark:bg-[#101726] rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
                       <button
+                        type="button"
                         onClick={handleCancelSession}
-                        className="py-3 px-4 bg-transparent border border-slate-200 dark:border-slate-850 hover:bg-slate-100 dark:hover:bg-slate-900 text-slate-550 font-black text-xs uppercase rounded-xl transition cursor-pointer flex-1"
+                        className="py-2.5 px-4 bg-transparent hover:bg-rose-500/10 text-rose-600 border border-rose-200 dark:border-rose-900/50 text-xs font-bold uppercase rounded-xl transition cursor-pointer flex-1 sm:flex-none"
                       >
-                        Cancelar Auditoría
+                        Cancelar
                       </button>
-                      <button
-                        onClick={onClose}
-                        className="py-3 px-4 bg-slate-100 hover:bg-slate-200 dark:bg-slate-855 dark:hover:bg-slate-800 text-slate-650 dark:text-slate-200 font-black text-xs uppercase rounded-xl transition cursor-pointer flex-1"
-                      >
-                        Pausar
-                      </button>
-                      <button
-                        onClick={handleCompleteSession}
-                        disabled={activeSummary.pendingItems > 0 || isLoading}
-                        className={`py-3 px-6 font-black text-xs uppercase rounded-xl transition shadow-lg flex-[1.5] cursor-pointer flex items-center justify-center gap-2 ${
-                          activeSummary.pendingItems > 0 
-                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed shadow-none' 
-                            : activeSession?.mode === 'BLIND' ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-650/10' : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-650/10'
-                        }`}
-                      >
-                        <Check size={14} />
-                        <span>Concluir Auditoría{activeSession?.mode === 'BLIND' ? ' a Ciegas' : ''}</span>
-                      </button>
+                      {onClose && (
+                        <button
+                          type="button"
+                          onClick={onClose}
+                          className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold uppercase rounded-xl transition cursor-pointer flex-1 sm:flex-none"
+                        >
+                          Pausar
+                        </button>
+                      )}
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={handleCompleteSession}
+                      disabled={activeSummary.pendingItems > 0 || isLoading}
+                      className={`w-full sm:w-auto py-3 px-6 text-xs font-black uppercase rounded-xl transition flex items-center justify-center gap-2 ${
+                        activeSummary.pendingItems > 0
+                          ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20 cursor-pointer'
+                      }`}
+                    >
+                      <CheckCircle size={15} />
+                      <span>
+                        {activeSummary.pendingItems > 0
+                          ? `Faltan ${activeSummary.pendingItems} artículos por contar`
+                          : (isAdmin ? 'Finalizar y Conciliar Inventario' : 'Concluir y Enviar a Revisión')}
+                      </span>
+                    </button>
                   </div>
 
                 </div>
@@ -1260,187 +1221,108 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
             </div>
           )}
 
-          {/* TAB DE HISTORIAL */}
+          {/* HISTORIAL DE AUDITORÍAS */}
           {activeTab === 'historico' && (
-            <div className="flex-1 flex flex-col gap-4 min-h-0 select-none">
-              <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
-                <div className="flex-1 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-2xl min-h-[30vh]">
-                  
-                  <div className="block lg:hidden flex flex-col gap-2.5 p-1">
-                    {historicalCounts.length === 0 ? (
-                      <div className="p-12 text-center text-slate-400 font-bold text-xs uppercase tracking-wider">
-                        No se registran auditorías históricas finalizadas.
-                      </div>
-                    ) : (
-                      historicalCounts.map(h => {
-                        const isApp = h.status === 'aprobado' || h.status === 'cerrado';
-                        const isSelected = selectedHistoricCount?.id === h.id;
-                        return (
-                          <div
-                            key={h.id}
-                            className={`p-3.5 bg-white dark:bg-[#11192e] rounded-xl border flex flex-col gap-2 transition ${
-                              isSelected 
-                                ? 'border-indigo-500 bg-indigo-500/[0.01]' 
-                                : 'border-slate-200 dark:border-slate-850 hover:border-slate-300'
-                            }`}
-                          >
-                            <div className="flex justify-between items-center text-xs">
-                              <span className="font-mono text-slate-400 font-black">#AUDIT-{h.id}</span>
-                              <span className={`py-0.5 px-2 border rounded-full text-[8px] uppercase font-black ${
-                                isApp 
-                                  ? 'bg-emerald-500/5 text-emerald-600 border-emerald-500/10' 
-                                  : 'bg-indigo-500/5 text-indigo-650 border-indigo-550/10'
-                              }`}>
-                                {h.status === 'cerrado' ? 'Conciliado' : h.status}
-                              </span>
-                            </div>
-                            <div className="text-xs">
-                              <p className="text-slate-800 dark:text-slate-200 font-bold">Auditor: {h.auditor_name || h.username}</p>
-                              <p className="text-slate-400 text-[10px] font-medium mt-0.5">Ubicación: {h.store_name || 'Almacén Principal'}</p>
-                              <p className="text-slate-400 text-[10px] font-medium mt-0.5">Cierre: {new Date(h.created_at).toLocaleString()}</p>
-                            </div>
-                            <button
-                              onClick={() => handleViewHistoricCount(h)}
-                              className="w-full mt-2 py-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 dark:border-slate-700 text-indigo-655 dark:text-indigo-400 text-[10px] font-black uppercase rounded-lg transition"
-                            >
-                              Ver detalles y diferencias
-                            </button>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-
-                  <div className="hidden lg:block">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-100/50 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-800 text-[9px] font-black text-slate-450 uppercase tracking-widest pl-4">
-                          <th className="p-3 pl-5">ID Auditoría</th>
-                          <th className="p-3">Auditor Responsable</th>
-                          <th className="p-3">Ubicación / Almacén</th>
-                          <th className="p-3 text-center">Modo</th>
-                          <th className="p-3 text-center">Estado</th>
-                          <th className="p-3 text-center">Fecha de Cierre</th>
-                          <th className="p-3 text-center pr-5">Acción</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-150 dark:divide-slate-850 text-[11px] font-bold">
-                        {historicalCounts.length === 0 ? (
-                          <tr>
-                            <td colSpan={7} className="p-12 text-center text-slate-400 font-semibold uppercase tracking-wide">
-                              No se registran auditorías o controles físicos históricos en este negocio.
-                            </td>
-                          </tr>
-                        ) : (
-                          historicalCounts.map(h => {
-                            const isApp = h.status === 'aprobado' || h.status === 'cerrado';
-                            const isSelected = selectedHistoricCount?.id === h.id;
-                            return (
-                              <tr 
-                                key={h.id} 
-                                className={`hover:bg-slate-100/30 dark:hover:bg-[#0d1221]/30 transition ${
-                                  isSelected ? 'bg-indigo-500/5' : ''
-                                }`}
-                              >
-                                <td className="p-3 pl-5 font-mono text-slate-450">#AUDIT-{h.id}</td>
-                                <td className="p-3 uppercase text-slate-700 dark:text-slate-200">{h.auditor_name || h.username}</td>
-                                <td className="p-3 uppercase text-slate-500">{h.store_name || 'Almacén Principal'}</td>
-                                <td className="p-3 text-center">
-                                  <span className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 py-0.5 px-2 text-[8.5px] font-black uppercase rounded-lg border border-indigo-500/20">
-                                    {h.mode === 'BLIND' ? 'A Ciegas' : (h.mode === 'STANDARD' ? 'Administrativo' : h.mode)}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-center">
-                                  <span className={`py-0.5 px-2 border rounded-full text-[8.5px] uppercase font-black ${
-                                    isApp 
-                                      ? 'bg-emerald-500/5 text-emerald-600 border-emerald-500/10' 
-                                      : 'bg-indigo-500/5 text-indigo-650 border-indigo-550/10'
-                                  }`}>
-                                    {h.status === 'cerrado' ? 'Conciliado' : h.status}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-center font-mono text-slate-500 text-[10px]">{new Date(h.created_at).toLocaleString()}</td>
-                                <td className="p-3 text-center pr-5">
-                                  <button
-                                    onClick={() => handleViewHistoricCount(h)}
-                                    className="py-1 px-3 bg-slate-50 border border-slate-200 dark:bg-[#11192e] dark:border-slate-800 hover:bg-slate-100 text-indigo-655 dark:text-indigo-400 text-[10px] font-black uppercase rounded-lg transition"
-                                  >
-                                    Ver Detalle
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
+            <div className="flex-1 flex flex-col gap-3 min-h-0">
+              {historicalCounts.length === 0 ? (
+                <div className="p-12 text-center text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-wide bg-white dark:bg-[#101726] border border-slate-200 dark:border-slate-800 rounded-3xl">
+                  No hay sesiones de auditoría física registradas en el historial.
                 </div>
-
-                {selectedHistoricCount && (
-                  <div className="w-full md:w-96 shrink-0 flex flex-col gap-3 min-h-[300px]">
-                    <div className="bg-white dark:bg-[#11192e] rounded-2xl border border-slate-200 dark:border-slate-800 p-4 flex flex-col gap-4 h-full">
-                      <div className="flex justify-between items-center border-b border-slate-150 dark:border-slate-850 pb-2.5">
-                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                          <span>Discrepancias Auditoría #{selectedHistoricCount.id}</span>
-                        </span>
-                        <button 
-                          onClick={() => setSelectedHistoricCount(null)}
-                          className="text-slate-400 hover:text-slate-650 dark:hover:text-white p-1 rounded-lg"
-                        >
-                          <X size={15} />
-                        </button>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-y-auto">
+                  {historicalCounts.map(count => (
+                    <div 
+                      key={count.id}
+                      className="p-4 bg-white dark:bg-[#11192e] rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase">
+                            Auditoría #{count.id}
+                          </span>
+                          <span className={`px-2.5 py-0.5 text-[9px] font-black uppercase rounded-md border ${
+                            count.status === 'cerrado' || count.status === 'aprobado'
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                              : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
+                          }`}>
+                            {count.status === 'cerrado' || count.status === 'aprobado' ? 'Conciliado' : count.status}
+                          </span>
+                        </div>
+                        <h4 className="text-sm font-black text-slate-800 dark:text-white uppercase mt-1">
+                          {count.store_name || 'Almacén Principal'}
+                        </h4>
+                        <p className="text-xs text-slate-400 font-medium mt-0.5">
+                          Auditor: {count.auditor_name || count.username} | Fecha: {new Date(count.created_at || count.started_at || '').toLocaleDateString()}
+                        </p>
                       </div>
 
-                      <div className="flex-1 overflow-y-auto max-h-[40vh] flex flex-col gap-2.5 pr-1 scrollbar-thin">
-                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider pl-1 block">Diferencias de producto individuales:</span>
-                        
-                        {historicItems.map(it => {
-                          const exp = it.adjusted_expected_quantity ?? it.system_stock ?? 0;
-                          const physical = it.counted_stock ?? 0;
-                          const diff = physical - exp;
-
-                          if (diff === 0) return null;
-
-                          return (
-                            <div key={it.id} className="p-3 rounded-xl border border-slate-150 dark:border-slate-850 bg-slate-50/40 dark:bg-[#070c14]/30 flex justify-between items-center">
-                              <div className="max-w-[70%]">
-                                <div className="text-xs font-extrabold text-slate-800 dark:text-slate-200 uppercase truncate leading-none">{it.product_name}</div>
-                                <div className="text-[9px] text-slate-450 dark:text-slate-400 font-mono mt-1.5 font-bold">
-                                  Esperado: {exp} | Físico: {physical}
-                                </div>
-                              </div>
-                              <span className={`font-mono text-xs font-black shrink-0 ${diff > 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
-                                {diff > 0 ? `+${diff}` : diff} pz
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleViewHistoricCount(count)}
+                        className="w-full py-2 px-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold uppercase rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        <FileText size={13} />
+                        <span>Ver Detalle de la Sesión</span>
+                      </button>
                     </div>
-                  </div>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
         </div>
 
-        {/* PIE DE PÁGINA */}
-        <div className="p-4 md:p-5 bg-white dark:bg-[#0f1626] border-t border-slate-200 dark:border-slate-800 flex justify-between items-center shrink-0 select-none pb-8 md:pb-5">
-          <span className="text-[10px] text-slate-400 font-bold hidden sm:inline uppercase">
-            {activeTab === 'activo' ? 'Sesión de Auditoría en Curso' : 'Historial de Auditorías'}
-          </span>
-          <button 
-            type="button"
-            onClick={onClose} 
-            className="px-5 py-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-white font-extrabold text-xs uppercase rounded-xl cursor-pointer transition select-none flex items-center justify-center min-h-[44px]"
-          >
-            Cerrar Panel
-          </button>
-        </div>
-
       </div>
+
+      {/* MODAL DETALLE HISTÓRICO */}
+      {selectedHistoricCount && (
+        <div className="fixed inset-0 z-[110] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 md:p-6">
+          <div className="bg-white dark:bg-[#0f172a] rounded-3xl border border-slate-200 dark:border-slate-800 max-w-2xl w-full p-5 md:p-6 shadow-2xl flex flex-col gap-4 max-h-[85vh]">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base font-black text-slate-800 dark:text-white uppercase">
+                  Detalle de Auditoría #{selectedHistoricCount.id}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {selectedHistoricCount.store_name || 'Almacén Principal'} - {selectedHistoricCount.auditor_name || selectedHistoricCount.username}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedHistoricCount(null)}
+                className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-2xl">
+              {historicItems.map(it => (
+                <div key={it.id} className="p-3 flex items-center justify-between text-xs gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-black text-slate-800 dark:text-white uppercase truncate">{it.product_name}</div>
+                    <div className="text-[10px] text-slate-400 font-mono">SKU: {it.product_sku}</div>
+                  </div>
+                  <div className="flex items-center gap-3 font-mono">
+                    <span className="text-[11px] text-slate-500">POS: {it.system_stock ?? it.live_stock ?? 0}</span>
+                    <span className="text-[11px] font-bold text-slate-800 dark:text-white">Físico: {it.counted_stock}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSelectedHistoricCount(null)}
+              className="w-full py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold text-xs uppercase rounded-xl"
+            >
+              Cerrar Detalle
+            </button>
+          </div>
+        </div>
+      )}
+
+    </div>
   );
 }

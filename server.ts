@@ -5830,7 +5830,58 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         return res.status(404).json({ error: "Sesión de conteo no encontrada." });
       }
 
-      let items = db.prepare('SELECT * FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
+      // Si la sesión está activa, asegurarse de que todos los productos del alcance existan en inventory_count_items
+      if (count.status === 'en_progreso' || count.status === 'pausado') {
+        try {
+          let currentProducts: any[] = [];
+          if (count.category_filter && count.category_filter !== 'Todos') {
+            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE category = ?').all(count.category_filter) as any[];
+          } else {
+            currentProducts = db.prepare('SELECT id, name, sku, stock, category FROM products').all() as any[];
+          }
+
+          const existingItems = db.prepare('SELECT product_id FROM inventory_count_items WHERE inventory_count_id = ?').all(id) as any[];
+          const existingIds = new Set(existingItems.map(it => it.product_id));
+
+          const insertMissing = db.prepare(`
+            INSERT INTO inventory_count_items (
+              inventory_count_id, product_id, product_name, product_sku, 
+              expected_quantity, physical_quantity, difference, status
+            )
+            VALUES (?, ?, ?, ?, ?, 0, 0, 'pendiente')
+          `);
+
+          for (const p of currentProducts) {
+            if (!existingIds.has(p.id)) {
+              insertMissing.run(id, p.id, p.name, p.sku, p.stock);
+            }
+          }
+
+          // Actualizar el total de productos de la sesión
+          const totalCount = db.prepare('SELECT COUNT(*) as total FROM inventory_count_items WHERE inventory_count_id = ?').get(id) as any;
+          if (totalCount && totalCount.total !== count.total_products) {
+            db.prepare('UPDATE inventory_counts SET total_products = ? WHERE id = ?').run(totalCount.total, id);
+            count.total_products = totalCount.total;
+          }
+        } catch (syncErr: any) {
+          console.warn("[Inventory Count Sync Warning]", syncErr.message);
+        }
+      }
+
+      let items = db.prepare(`
+        SELECT 
+          ici.*,
+          p.stock as live_stock,
+          p.name as live_product_name,
+          p.sku as live_product_sku,
+          p.category as live_category,
+          p.price_sale,
+          p.price_cost
+        FROM inventory_count_items ici
+        LEFT JOIN products p ON p.id = ici.product_id
+        WHERE ici.inventory_count_id = ?
+        ORDER BY ici.id ASC
+      `).all(id) as any[];
 
       // Ocultar stock del sistema SOLO si es una sesión MODO A CIEGAS y quien consulta no es un Administrador/Propietario (o vista explicita de auditor)
       const isBlindSession = count.mode === 'BLIND';
@@ -5841,8 +5892,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           id: it.id,
           inventory_count_id: it.inventory_count_id,
           product_id: it.product_id,
-          product_name: it.product_name,
-          product_sku: it.product_sku,
+          product_name: it.live_product_name || it.product_name,
+          product_sku: it.live_product_sku || it.product_sku,
+          product_category: it.live_category || 'General',
           physical_quantity: it.physical_quantity || 0,
           notes: it.notes || '',
           status: it.status === 'pendiente' ? 'pendiente' : 'contado',
@@ -5853,39 +5905,20 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         return res.json({ ...sanitizedCount, items, is_blind_sanitized: true });
       }
 
-      // Para Administradores / Propietarios en revisión:
-      // Calcular movimientos ocurridos durante el conteo entre started_at y completed_at (o la hora actual)
-      const endTime = count.completed_at || getBoliviaISOString();
-      const startTime = count.started_at;
-
+      // Para sesiones activas o con visibilidad, el stock esperado del sistema coincide siempre con el stock real del POS
       items = items.map((it: any) => {
-        // Query movements from inventory_audit_logs during the audit window
-        let movementsSum = 0;
-        try {
-          const movsRow = db.prepare(`
-            SELECT 
-              COALESCE(SUM(CASE WHEN type IN ('ingreso_compra', 'ingreso_devolucion', 'ajuste_incremento') THEN quantity ELSE -quantity END), 0) as net_movements
-            FROM inventory_audit_logs
-            WHERE product_id = ? AND created_at >= ? AND created_at <= ?
-          `).get(it.product_id, startTime, endTime) as any;
-
-          movementsSum = movsRow ? movsRow.net_movements : 0;
-        } catch (mErr) {}
-
-        const snapshot = it.expected_quantity_snapshot !== undefined && it.expected_quantity_snapshot !== null
-          ? it.expected_quantity_snapshot 
-          : it.expected_quantity;
-
-        const adjustedExpected = snapshot + movementsSum;
-        const diff = (it.physical_quantity || 0) - adjustedExpected;
+        const liveSysStock = (it.live_stock !== undefined && it.live_stock !== null) ? it.live_stock : (it.expected_quantity || 0);
+        const physical = it.physical_quantity || 0;
+        const diff = physical - liveSysStock;
 
         return {
           ...it,
-          expected_quantity_snapshot: snapshot,
-          movements_during_count: movementsSum,
-          adjusted_expected_quantity: adjustedExpected,
-          difference: diff,
-          had_movements_during_count: movementsSum !== 0 ? 1 : 0
+          product_name: it.live_product_name || it.product_name,
+          product_sku: it.live_product_sku || it.product_sku,
+          product_category: it.live_category || 'General',
+          expected_quantity: liveSysStock,
+          live_stock: liveSysStock,
+          difference: diff
         };
       });
 
@@ -5905,22 +5938,28 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         return res.status(400).json({ error: "No se puede modificar un conteo que ya ha sido cerrado o cancelado." });
       }
 
-      const item = db.prepare('SELECT product_id, product_name, expected_quantity, expected_quantity_snapshot FROM inventory_count_items WHERE id = ?').get(itemId) as any;
+      const item = db.prepare(`
+        SELECT ici.product_id, ici.product_name, ici.expected_quantity, p.stock as live_stock 
+        FROM inventory_count_items ici 
+        LEFT JOIN products p ON p.id = ici.product_id 
+        WHERE ici.id = ?
+      `).get(itemId) as any;
+
       if (!item) {
         return res.status(404).json({ error: "Artículo de conteo no encontrado." });
       }
 
       const physical = Math.max(0, Number(physical_quantity || 0));
-      const expected = item.expected_quantity_snapshot ?? item.expected_quantity ?? 0;
-      const difference = physical - expected;
+      const liveExpected = (item.live_stock !== undefined && item.live_stock !== null) ? Number(item.live_stock) : Number(item.expected_quantity || 0);
+      const difference = physical - liveExpected;
       
       let status = bodyStatus === 'pendiente' ? 'pendiente' : (difference === 0 ? 'correcto' : 'diferencia');
 
       db.prepare(`
         UPDATE inventory_count_items
-        SET physical_quantity = ?, difference = ?, status = ?, notes = ?, recount_requested = 0, reviewed_at = CURRENT_TIMESTAMP
+        SET expected_quantity = ?, physical_quantity = ?, difference = ?, status = ?, notes = ?, recount_requested = 0, reviewed_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(physical, difference, status, notes || null, itemId);
+      `).run(liveExpected, physical, difference, status, notes || null, itemId);
 
       // Recalculate indicators for session
       const stats = db.prepare(`

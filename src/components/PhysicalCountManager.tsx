@@ -1009,7 +1009,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                   {/* ======================================================== */}
                   {/* LISTA DE ARTÍCULOS DE ALTA DENSIDAD Y ESPACIO EXPANDIDO  */}
                   {/* ======================================================== */}
-                  <div className="flex-1 overflow-y-auto p-2 md:p-3 flex flex-col gap-1.5 pb-20">
+                  <div className="flex-1 overflow-y-auto p-2 md:p-3 flex flex-col gap-2 pb-24">
                     {filteredItems.length === 0 ? (
                       <div className="p-8 text-center text-slate-400 dark:text-slate-500 font-bold text-xs uppercase tracking-wide bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-slate-800 rounded-2xl my-auto">
                         {itemSearch ? 'No se encontraron artículos con ese criterio.' : 'No hay artículos en esta vista.'}
@@ -1026,80 +1026,89 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                           <div
                             key={it.id}
                             id={`item-count-${it.id}`}
-                            className={`p-2 md:p-2.5 rounded-xl border transition-all flex items-center justify-between gap-2 ${
+                            className={`p-2.5 sm:p-3 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 sm:gap-3 ${
                               isChecked
-                                ? 'bg-white dark:bg-[#0f172a] border-emerald-500/40 shadow-xs'
-                                : 'bg-white dark:bg-[#0f172a] border-slate-200 dark:border-slate-800 shadow-xs'
+                                ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500/50 shadow-xs'
+                                : 'bg-white dark:bg-[#0f172a] border-slate-200 dark:border-slate-800 shadow-xs hover:border-slate-300 dark:hover:border-slate-700'
                             }`}
                           >
-                            {/* Información del Artículo (Lado Izquierdo) */}
-                            <div className="min-w-0 flex-1">
+                            {/* Información del Artículo (Descripción COMPLETA sin recortes) */}
+                            <div className="min-w-0 flex-1 flex flex-col gap-1">
+                              {/* Metadata: ID, SKU, Categoría y Estado */}
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="text-[9px] font-mono font-bold text-slate-400">
+                                <span className="text-[10px] font-mono font-bold text-slate-400 dark:text-slate-500">
                                   #{it.product_id}
                                 </span>
                                 {it.product_sku && (
-                                  <span className="text-[9px] font-mono text-slate-400">
+                                  <span className="text-[10px] font-mono font-semibold text-slate-500 dark:text-slate-400">
                                     SKU: {it.product_sku}
                                   </span>
                                 )}
                                 {it.product_category && (
-                                  <span className="px-1 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950/40 text-[8px] font-black uppercase text-indigo-600 dark:text-indigo-400">
+                                  <span className="px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/60 text-[9px] font-black uppercase text-indigo-600 dark:text-indigo-400 border border-indigo-200/50 dark:border-indigo-800/50">
                                     {it.product_category}
+                                  </span>
+                                )}
+                                {isChecked && (
+                                  <span className="ml-auto sm:hidden px-1.5 py-0.2 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9px] font-black uppercase border border-emerald-500/20">
+                                    ✓ Verificado
                                   </span>
                                 )}
                               </div>
                               
-                              <h3 className="text-xs md:text-sm font-black text-slate-900 dark:text-white uppercase leading-tight truncate mt-0.5">
+                              {/* NOMBRE COMPLETO DEL PRODUCTO (Permite salto de línea fluido en pantallas verticales) */}
+                              <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase leading-snug break-words whitespace-normal">
                                 {it.product_name}
                               </h3>
 
-                              {/* Info de Stock POS y Diferencia */}
-                              <div className="flex items-center gap-2 mt-0.5 font-mono text-[10px]">
+                              {/* Existencias POS y Discrepancias */}
+                              <div className="flex items-center gap-2.5 font-mono text-[10px] sm:text-xs">
                                 {showStock && (
-                                  <span className="text-slate-500 dark:text-slate-400 font-bold">
-                                    POS: <strong className="text-slate-900 dark:text-white">{sysStock} u</strong>
+                                  <span className="text-slate-500 dark:text-slate-400 font-medium">
+                                    Stock POS: <strong className="text-slate-900 dark:text-white font-bold">{sysStock} u</strong>
                                   </span>
                                 )}
                                 {isChecked && showStock && (
-                                  <span className={`font-black ${
+                                  <span className={`font-black px-1.5 py-0.2 rounded ${
                                     diff === 0 
-                                      ? 'text-emerald-600 dark:text-emerald-400' 
+                                      ? 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50' 
                                       : diff > 0 
-                                        ? 'text-indigo-600 dark:text-indigo-400' 
-                                        : 'text-rose-600 dark:text-rose-400'
+                                        ? 'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50' 
+                                        : 'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50'
                                   }`}>
-                                    {diff === 0 ? '✓ Coincide' : diff > 0 ? `+${diff} u` : `${diff} u`}
+                                    {diff === 0 ? '✓ Coincide' : diff > 0 ? `+${diff} u (Sobrante)` : `${diff} u (Faltante)`}
                                   </span>
                                 )}
                               </div>
                             </div>
 
-                            {/* Controles de Conteo (Lado Derecho) */}
-                            <div className="flex items-center gap-1.5 shrink-0">
+                            {/* Controles de Conteo (Adaptables a vertical en móviles y horizontal en desktop/kiosco ancho) */}
+                            <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800/80">
                               
-                              {/* Botón = POS */}
+                              {/* Botón Rápido = POS */}
                               {showStock && (
                                 <button
                                   type="button"
                                   onClick={() => handleSetStockToSystem(it)}
-                                  className={`px-2 py-1.5 rounded-lg text-[10px] font-black uppercase transition border cursor-pointer ${
+                                  className={`flex-1 sm:flex-initial px-2.5 py-1.5 rounded-xl text-[10px] sm:text-xs font-black uppercase transition border cursor-pointer flex items-center justify-center gap-1 active:scale-95 ${
                                     isChecked && physical === sysStock
-                                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
-                                      : 'bg-slate-100 hover:bg-indigo-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                                      ? 'bg-emerald-500 text-white border-emerald-600 shadow-xs'
+                                      : 'bg-slate-100 hover:bg-indigo-50 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
                                   }`}
                                   title="Igualar a la cantidad del POS"
                                 >
-                                  = POS ({sysStock})
+                                  <span>= POS</span>
+                                  <span className="font-mono">({sysStock})</span>
                                 </button>
                               )}
 
-                              {/* Stepper de Conteo */}
-                              <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-lg p-0.5 border border-slate-200 dark:border-slate-700">
+                              {/* Stepper de Conteo Táctil */}
+                              <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-xl p-0.5 border border-slate-200 dark:border-slate-700 shrink-0">
                                 <button
                                   type="button"
                                   onClick={() => handleUpdateItem(it.id, { counted_stock: Math.max(0, physical - 1), is_checked: 1 })}
-                                  className="w-7 h-7 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-sm flex items-center justify-center hover:bg-slate-200 transition active:scale-90 cursor-pointer shadow-xs"
+                                  className="w-8 h-8 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-base flex items-center justify-center hover:bg-slate-200 dark:hover:bg-slate-600 transition active:scale-90 cursor-pointer shadow-xs"
+                                  title="Restar 1"
                                 >
                                   -
                                 </button>
@@ -1107,6 +1116,7 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                                 <input
                                   type="number"
                                   inputMode="numeric"
+                                  pattern="[0-9]*"
                                   min="0"
                                   value={it.counted_stock === null || it.counted_stock === undefined ? '' : it.counted_stock}
                                   onFocus={e => e.target.select()}
@@ -1114,30 +1124,31 @@ export default function PhysicalCountManager({ onClose, externalViewMode, embedd
                                     const val = parseInt(e.target.value);
                                     handleUpdateItem(it.id, { counted_stock: isNaN(val) ? 0 : Math.max(0, val), is_checked: 1 });
                                   }}
-                                  className="w-10 h-7 text-center font-mono font-black text-xs bg-transparent text-slate-900 dark:text-white focus:outline-none"
+                                  className="w-12 h-8 text-center font-mono font-black text-xs sm:text-sm bg-transparent text-slate-900 dark:text-white focus:outline-none"
                                 />
 
                                 <button
                                   type="button"
                                   onClick={() => handleUpdateItem(it.id, { counted_stock: physical + 1, is_checked: 1 })}
-                                  className="w-7 h-7 rounded-md bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-sm flex items-center justify-center hover:bg-slate-200 transition active:scale-90 cursor-pointer shadow-xs"
+                                  className="w-8 h-8 rounded-lg bg-white dark:bg-slate-700 text-slate-800 dark:text-white font-black text-base flex items-center justify-center hover:bg-slate-200 dark:hover:bg-slate-600 transition active:scale-90 cursor-pointer shadow-xs"
+                                  title="Sumar 1"
                                 >
                                   +
                                 </button>
                               </div>
 
-                              {/* Botón Marcar / Check */}
+                              {/* Botón Marcar / Check Táctil */}
                               <button
                                 type="button"
                                 onClick={() => handleToggleCheck(it)}
-                                className={`w-8 h-8 rounded-lg flex items-center justify-center transition active:scale-95 cursor-pointer shrink-0 ${
+                                className={`w-9 h-8 sm:w-8 sm:h-8 rounded-xl flex items-center justify-center transition active:scale-95 cursor-pointer shrink-0 ${
                                   isChecked
                                     ? 'bg-emerald-600 text-white shadow-xs'
                                     : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-emerald-500 hover:text-white'
                                 }`}
                                 title={isChecked ? "Marcar como pendiente" : "Marcar como verificado"}
                               >
-                                <Check size={16} className="stroke-[3]" />
+                                <Check size={18} className="stroke-[3]" />
                               </button>
 
                             </div>

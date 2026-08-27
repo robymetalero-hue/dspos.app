@@ -121,7 +121,7 @@ interface AppContextType {
     restoreLastClearedCart: () => boolean;
     restoreCartBackup: () => boolean;
     discardCartBackup: () => void;
-    updateCartItemPrice: (productId: number, priceType: 'unit' | 'bulk' | 'custom', customPrice?: number) => void;
+    updateCartItemPrice: (productId: number, priceType: 'unit' | 'bulk' | 'custom', customPrice?: number, customPriceBs?: number) => void;
     products: Product[];
     clients: Client[];
     fetchProducts: (searchQuery?: string) => Promise<void>;
@@ -723,6 +723,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             } catch (e) {
                 console.error("Failed saving active cart safety backup:", e);
             }
+        } else {
+            // When cart is empty, ensure active cart backup is cleanly removed
+            try {
+                localStorage.removeItem('gtr_pos_active_cart_backup');
+            } catch (e) {}
         }
     }, [cart, clientName, clientPhone, discount, discountType, paymentMethod, activeTabId]);
 
@@ -849,7 +854,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const roundBs = (amount: number): number => {
-        return Math.round(amount * 2) / 2;
+        if (isNaN(amount) || amount === null || amount === undefined) return 0;
+        return Math.round((Number(amount) + Number.EPSILON) * 100) / 100;
     };
 
     const fetchExchangeRate = async () => {
@@ -1371,8 +1377,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setLastClearedMeta(null);
             setCartBackup(null);
             setCartBackupMeta(null);
-            localStorage.removeItem('gtr_pos_last_cleared_cart');
-            localStorage.removeItem('gtr_pos_active_cart_backup');
+            try {
+                localStorage.removeItem('gtr_pos_last_cleared_cart');
+                localStorage.removeItem('gtr_pos_active_cart_backup');
+            } catch (e) {}
+            // Also synchronize active sale tab so tab switching/re-renders cannot resurrect old cart items
+            setTabs(prev => prev.map(t => {
+                if (t.id === activeTabId) {
+                    return {
+                        ...t,
+                        cart: [],
+                        clientName: "",
+                        clientPhone: "",
+                        discount: 0,
+                        discountType: 'monto',
+                        paymentMethod: 'Efectivo'
+                    };
+                }
+                return t;
+            }));
         }
         setCart([]);
     };
@@ -1418,13 +1441,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.removeItem('gtr_pos_active_cart_backup');
     };
 
-    const updateCartItemPrice = (productId: number, priceType: 'unit' | 'bulk' | 'custom', customPrice?: number) => {
+    const updateCartItemPrice = (productId: number, priceType: 'unit' | 'bulk' | 'custom', customPrice?: number, customPriceBs?: number) => {
         setCart(prev => prev.map(item => {
             if (item.id === productId) {
                 return {
                     ...item,
                     price_type: priceType,
-                    custom_price: customPrice !== undefined ? customPrice : item.custom_price
+                    custom_price: customPrice !== undefined ? customPrice : item.custom_price,
+                    custom_price_bs: customPriceBs !== undefined ? customPriceBs : (priceType !== 'custom' ? undefined : item.custom_price_bs)
                 };
             }
             return item;

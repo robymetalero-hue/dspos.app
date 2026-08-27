@@ -40,6 +40,7 @@ export interface CartItem extends Product {
     cartQuantity: number;
     price_type?: 'unit' | 'bulk' | 'custom';
     custom_price?: number; // Custom price in USD
+    custom_price_bs?: number; // Custom price in Bolivianos (exact entered value)
 }
 
 export interface ReceiptTemplate {

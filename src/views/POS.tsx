@@ -721,6 +721,7 @@ export default function POS() {
     const getOverwriteValue = (original: string, current: string, isFirstKeyPress: boolean): string => {
         if (!isFirstKeyPress) return current;
         if (!original) return current;
+        if (current === original) return current;
         if (current.length <= original.length) return current;
         
         let i = 0;
@@ -731,7 +732,8 @@ export default function POS() {
         while (j < original.length - i && original[original.length - 1 - j] === current[current.length - 1 - j]) {
             j++;
         }
-        return current.slice(i, current.length - j);
+        const diff = current.slice(i, current.length - j);
+        return diff.length > 0 ? diff : current;
     };
 
     // States for viewing the last sale transaction directly
@@ -774,6 +776,9 @@ export default function POS() {
                 };
                 await saveOfflineAction('create_pending_sale', '/api/pending-sales', 'POST', payload);
                 clearCart(true);
+                setLocalPriceInputs({});
+                setSelectedCartItemId(null);
+                setIsMobileCartOpen(false);
                 setPendingClientName("");
                 setPendingDestination("");
                 setPendingClientPhone("");
@@ -799,6 +804,9 @@ export default function POS() {
             
             if (res.ok) {
                 clearCart(true);
+                setLocalPriceInputs({});
+                setSelectedCartItemId(null);
+                setIsMobileCartOpen(false);
                 setPendingClientName("");
                 setPendingDestination("");
                 setPendingClientPhone("");
@@ -1270,24 +1278,32 @@ export default function POS() {
     const getCartItemPriceBs = (item: any) => {
         if (!item) return 0;
         const rate = exchangeRate || 6.96;
-        if (item.price_type === 'custom' && item.custom_price !== undefined && item.custom_price !== null) {
-            return roundBs((Number(item.custom_price) || 0) * rate);
+        if (item.price_type === 'custom') {
+            if (item.custom_price_bs !== undefined && item.custom_price_bs !== null) {
+                return Number(item.custom_price_bs) || 0;
+            }
+            if (item.custom_price !== undefined && item.custom_price !== null) {
+                return roundBs((Number(item.custom_price) || 0) * rate);
+            }
         }
         return roundBs(getCartItemPriceUSD(item) * rate);
     };
 
     const handleCustomPriceChange = (itemId: number, text: string) => {
         setLocalPriceInputs(prev => ({ ...prev, [itemId]: text }));
-        const valBs = parseFloat(text);
+        const normalized = text.replace(',', '.').trim();
+        const valBs = parseFloat(normalized);
         if (!isNaN(valBs) && valBs >= 0) {
-            updateCartItemPrice(itemId, 'custom', valBs / exchangeRate);
+            const rate = exchangeRate || 6.96;
+            updateCartItemPrice(itemId, 'custom', valBs / rate, valBs);
         }
     };
 
     const enableCustomPrice = (item: any) => {
         const currentPriceBs = getCartItemPriceBs(item);
         setLocalPriceInputs(prev => ({ ...prev, [item.id]: currentPriceBs.toFixed(2) }));
-        updateCartItemPrice(item.id, 'custom', currentPriceBs / exchangeRate);
+        const rate = exchangeRate || 6.96;
+        updateCartItemPrice(item.id, 'custom', currentPriceBs / rate, currentPriceBs);
     };
 
     // Calculate Categorias with memoization
@@ -1466,6 +1482,9 @@ export default function POS() {
                     });
 
                     clearCart(true);
+                    setLocalPriceInputs({});
+                    setSelectedCartItemId(null);
+                    setIsMobileCartOpen(false);
                     setDiscount(0);
                     setClientName("");
                     setClientPhone("");
@@ -1533,6 +1552,9 @@ export default function POS() {
                     });
 
                     clearCart(true);
+                    setLocalPriceInputs({});
+                    setSelectedCartItemId(null);
+                    setIsMobileCartOpen(false);
                     setDiscount(0);
                     setClientName("");
                     setClientPhone("");
@@ -2211,14 +2233,16 @@ export default function POS() {
                                                     <input 
                                                         type="text" 
                                                         inputMode="decimal"
-                                                        pattern="[0-9.]*"
+                                                        pattern="[0-9.,]*"
+                                                        autoComplete="off"
+                                                        autoCorrect="off"
                                                         disabled={!hasPermission(user, 'modify_prices')}
                                                         className={`w-18 px-1.5 py-0.5 text-[11px] font-black font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md text-indigo-600 dark:text-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-center transition-all ${
                                                             isCustom ? 'ring-1 ring-amber-500/35 border-amber-500/20 bg-amber-500/5' : ''
                                                         }`}
                                                         value={localPriceInputs[item.id] !== undefined ? localPriceInputs[item.id] : activePriceBs.toFixed(2)}
                                                         onChange={(e) => {
-                                                            const rawVal = e.target.value;
+                                                            const rawVal = e.target.value.replace(/[^0-9.,]/g, '');
                                                             const origPriceText = localPriceInputs[item.id] !== undefined ? localPriceInputs[item.id] : activePriceBs.toFixed(2);
                                                             const isFirst = justFocusedPrice[item.id];
                                                             const finalVal = getOverwriteValue(origPriceText, rawVal, isFirst);
@@ -2252,6 +2276,19 @@ export default function POS() {
                                                         }}
                                                         onBlur={() => {
                                                             setJustFocusedPrice(prev => ({ ...prev, [item.id]: false }));
+                                                            const currentText = (localPriceInputs[item.id] !== undefined ? localPriceInputs[item.id] : "").replace(',', '.').trim();
+                                                            const num = parseFloat(currentText);
+                                                            if (!isNaN(num) && num >= 0) {
+                                                                setLocalPriceInputs(prev => ({ ...prev, [item.id]: num.toFixed(2) }));
+                                                                const rate = exchangeRate || 6.96;
+                                                                updateCartItemPrice(item.id, 'custom', num / rate, num);
+                                                            } else {
+                                                                setLocalPriceInputs(prev => {
+                                                                    const copy = { ...prev };
+                                                                    delete copy[item.id];
+                                                                    return copy;
+                                                                });
+                                                            }
                                                         }}
 
                                                         title="Haga clic para editar el precio directamente"

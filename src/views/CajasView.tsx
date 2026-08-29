@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { hasPermission } from '../utils/permissions';
+import { TableSkeleton, EmptyState, StatCardSkeleton } from '../components/UIStateFeedback';
 import { 
   Landmark, DollarSign, History, Calendar, Clock, RefreshCw, ChevronRight, X, FileText, 
   UserCheck, HelpCircle, ArrowUpRight, ArrowDownLeft, Sliders, AlertCircle, Plus, Search, CheckCircle2,
@@ -499,8 +500,12 @@ export default function CajasView() {
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-850/40 text-[11px] font-bold">
                       {movements.length === 0 ? (
                         <tr>
-                          <td colSpan={7} className="p-12 text-center text-slate-400 font-medium">
-                            No posees ventas pendientes de liquidación en tu caja acumulativa activa.
+                          <td colSpan={7} className="p-8">
+                            <EmptyState
+                              icon={Landmark}
+                              title="Sin ventas pendientes de liquidar"
+                              description="No posees movimientos o transacciones pendientes de liquidación en tu caja acumulativa activa."
+                            />
                           </td>
                         </tr>
                       ) : (
@@ -667,8 +672,12 @@ export default function CajasView() {
               <tbody className="divide-y divide-slate-100 dark:divide-slate-850/50 text-[11px] font-bold">
                 {filteredSettlements.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="p-12 text-center text-slate-400 font-medium">
-                      No se registran liquidaciones históricas de caja acumulativa de vendedores bajo los filtros seleccionados.
+                    <td colSpan={9} className="p-8">
+                      <EmptyState
+                        icon={History}
+                        title="Sin liquidaciones históricas"
+                        description="No se registran liquidaciones históricas de caja acumulativa de vendedores bajo los filtros seleccionados."
+                      />
                     </td>
                   </tr>
                 ) : (

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppContext } from '../context/AppContext';
 import PhysicalCountManager from '../components/PhysicalCountManager';
+import { TableSkeleton, EmptyState } from '../components/UIStateFeedback';
 import { 
     History, Search, Filter, RefreshCw, Calendar, ArrowDownLeft, 
     ArrowUpRight, ShoppingBag, ClipboardList, User, ShieldCheck, Download,
@@ -745,17 +746,20 @@ export default function AuditoriaView() {
                                     <tbody className="divide-y divide-slate-100/80 dark:divide-slate-850/60 text-xs font-semibold overflow-y-auto">
                                         {loading ? (
                                             <tr>
-                                                <td colSpan={9} className="text-center py-16">
-                                                    <div className="flex flex-col items-center gap-2">
-                                                        <RefreshCw size={22} className="text-indigo-500 animate-spin" />
-                                                        <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-widest">Cargando registros inmutables...</span>
-                                                    </div>
+                                                <td colSpan={9} className="p-6">
+                                                    <TableSkeleton rows={6} cols={9} />
                                                 </td>
                                             </tr>
                                         ) : logs.length === 0 ? (
                                             <tr>
-                                                <td colSpan={9} className="text-center py-16 text-slate-400 font-extrabold uppercase tracking-wider">
-                                                    No se encontraron registros de auditoría con los filtros actuales.
+                                                <td colSpan={9} className="p-8">
+                                                    <EmptyState
+                                                        icon={ShieldCheck}
+                                                        title="Sin registros de auditoría"
+                                                        description="No se encontraron eventos coincidentes con los filtros aplicados o no hay incidentes registrados en este período."
+                                                        actionLabel="Restablecer Filtros"
+                                                        onAction={resetFilters}
+                                                    />
                                                 </td>
                                             </tr>
                                         ) : (

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { filterAndRankProducts } from '../lib/searchUtils';
+import { TableSkeleton, CardGridSkeleton, EmptyState, StatusBadge } from '../components/UIStateFeedback';
 import { 
     Search, Calendar, User, Phone, Receipt, CircleDollarSign, CheckCircle2, 
     AlertCircle, History, Wallet, X, ArrowLeftRight, Landmark, Tag, 
@@ -1401,17 +1402,18 @@ export default function CuentasPorCobrarView() {
                     {/* Pending Sales Grid List */}
                     <div className="flex-grow bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200/60 dark:border-slate-850 overflow-hidden shadow-xs flex flex-col min-h-[350px]">
                         {loadingPending ? (
-                            <div className="flex-1 flex flex-col items-center justify-center p-10 gap-2.5">
-                                <div className="w-8 h-8 rounded-full border-4 border-indigo-600 border-t-transparent animate-spin" />
-                                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 font-mono">Cargando pedidos ...</span>
+                            <div className="p-6">
+                                <CardGridSkeleton count={6} />
                             </div>
                         ) : filteredPendingSales.length === 0 ? (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center p-14">
-                                <Truck size={36} className="text-slate-200 dark:text-slate-800 mb-2.5" />
-                                <span className="text-[10px] font-black uppercase text-slate-400 dark:text-slate-500 tracking-wider">No hay ventas pendientes</span>
-                                <p className="text-[10px] text-slate-400 dark:text-slate-500 max-w-[280px] mt-1 font-semibold leading-relaxed">
-                                    No hay registros de pedidos en espera o retenidos actualmente.
-                                </p>
+                            <div className="p-8 my-auto">
+                                <EmptyState
+                                    icon={Truck}
+                                    title="No hay pedidos o ventas pendientes"
+                                    description="No se encontraron registros de pedidos en espera o retenidos que coincidan con la búsqueda activa."
+                                    actionLabel={pendingSearchQuery ? "Limpiar Búsqueda" : undefined}
+                                    onAction={pendingSearchQuery ? () => setPendingSearchQuery('') : undefined}
+                                />
                             </div>
                         ) : (
                             <div className="overflow-y-auto flex-grow max-h-[62vh] p-4">
@@ -1702,17 +1704,18 @@ export default function CuentasPorCobrarView() {
                     {/* Debts list table */}
                     <div className="flex-grow bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200/60 dark:border-slate-850 overflow-hidden shadow-xs flex flex-col min-h-[350px]">
                         {loadingDebts ? (
-                            <div className="flex-1 flex flex-col items-center justify-center p-10 gap-2.5">
-                                <div className="w-8 h-8 rounded-full border-4 border-indigo-650 border-t-transparent animate-spin" />
-                                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 font-mono">Buscando registros ...</span>
+                            <div className="p-6">
+                                <TableSkeleton rows={6} cols={8} />
                             </div>
                         ) : filteredDebts.length === 0 ? (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center p-14">
-                                <Landmark size={36} className="text-slate-200 dark:text-slate-800 mb-2.5" />
-                                <span className="text-[10px] font-black uppercase text-slate-400 dark:text-slate-500 tracking-wider">No se encontraron créditos</span>
-                                <p className="text-[10px] text-slate-400 dark:text-slate-500 max-w-[280px] mt-1 font-semibold leading-relaxed">
-                                    No hay registros de créditos o cuentas pendientes que coincidan con los filtros activos.
-                                </p>
+                            <div className="p-8 my-auto">
+                                <EmptyState
+                                    icon={Landmark}
+                                    title="No se encontraron créditos registrados"
+                                    description="No hay registros de cuentas por cobrar o créditos activos que coincidan con los filtros seleccionados."
+                                    actionLabel={debtsSearchQuery ? "Limpiar Búsqueda" : undefined}
+                                    onAction={debtsSearchQuery ? () => setDebtsSearchQuery('') : undefined}
+                                />
                             </div>
                         ) : (
                             <div className="overflow-x-auto flex-grow max-h-[58vh]">

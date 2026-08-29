@@ -235,6 +235,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_sales_client_id ON sales (client_id);
   CREATE INDEX IF NOT EXISTS idx_sales_cierre_id ON sales (cierre_id);
   CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales (created_at);
+  CREATE INDEX IF NOT EXISTS idx_sales_client_op_id ON sales (client_operation_id);
+
+  CREATE INDEX IF NOT EXISTS idx_products_sku ON products (sku);
+  CREATE INDEX IF NOT EXISTS idx_products_category ON products (category);
+  CREATE INDEX IF NOT EXISTS idx_products_updated_at ON products (updated_at);
 
   CREATE INDEX IF NOT EXISTS idx_sale_items_sale_id ON sale_items (sale_id);
   CREATE INDEX IF NOT EXISTS idx_sale_items_product_id ON sale_items (product_id);

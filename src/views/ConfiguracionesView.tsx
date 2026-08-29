@@ -5,6 +5,7 @@ import { Settings, TrendingUp, History, ShieldAlert, Lock, Save, Cloud, Database
 import { jsPDF } from 'jspdf';
 import RgbCustomizerPanel from '../components/RgbCustomizerPanel';
 import { saveOfflineAction, clearAllOfflineStorage } from '../utils/offlineStorage';
+import { EmptyState, TableSkeleton } from '../components/UIStateFeedback';
 
 interface AuditLog {
     id: number;
@@ -932,8 +933,12 @@ export default function ConfiguracionesView() {
                             <tbody className="divide-y divide-slate-100 dark:divide-slate-850/50 text-[10px] font-bold">
                                 {auditLogs.length === 0 ? (
                                     <tr>
-                                        <td colSpan={4} className="p-8 text-center text-slate-400 font-semibold leading-normal">
-                                            No se registran cambios históricos del tipo de cambio.
+                                        <td colSpan={4} className="p-6">
+                                            <EmptyState
+                                                icon={History}
+                                                title="Sin cambios históricos"
+                                                description="No se registran cambios históricos registrados del tipo de cambio oficial."
+                                            />
                                         </td>
                                     </tr>
                                 ) : (

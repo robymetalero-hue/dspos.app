@@ -10,6 +10,7 @@ import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import LowStockNotificationSystem from '../components/LowStockNotificationSystem';
 import { useElasticScroll } from '../utils/touchScroll';
 import PhysicalCountManager from '../components/PhysicalCountManager';
+import { TableSkeleton, EmptyState } from '../components/UIStateFeedback';
 
 
 // --- Optimized Search Input ---
@@ -2456,14 +2457,29 @@ export default function Inventory() {
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-850/50 text-[11px] font-bold">
                             {products.length === 0 ? (
                                 <tr>
-                                    <td colSpan={view === 'productos' ? (user?.role === 'admin' ? 9 : 8) : 8} className="p-12 text-center text-slate-400">
-                                        No hay productos registrados en el inventario. Haz clic en "Agregar Producto" para insertar uno.
+                                    <td colSpan={view === 'productos' ? (user?.role === 'admin' ? 9 : 8) : 8} className="p-8">
+                                        <EmptyState
+                                            icon={ShoppingBag}
+                                            title="No hay productos registrados"
+                                            description="El inventario está vacío actualmente. Puedes registrar nuevos artículos de forma manual o importar un catálogo."
+                                            actionLabel={hasPermission(user, 'can_create_products') ? "Agregar Producto" : undefined}
+                                            onAction={hasPermission(user, 'can_create_products') ? openCreateForm : undefined}
+                                        />
                                     </td>
                                 </tr>
                             ) : finalFilteredProducts.length === 0 ? (
                                 <tr>
-                                    <td colSpan={view === 'productos' ? (user?.role === 'admin' ? 9 : 8) : 8} className="p-12 text-[#94a3b8] dark:text-zinc-500 font-bold text-center py-12">
-                                        🚫 Ningún artículo coincide con los filtros aplicados. Intenta con otra búsqueda o selecciona "Todos".
+                                    <td colSpan={view === 'productos' ? (user?.role === 'admin' ? 9 : 8) : 8} className="p-8">
+                                        <EmptyState
+                                            icon={Search}
+                                            title="Sin coincidencias en inventario"
+                                            description="Ningún artículo coincide con los términos de búsqueda o filtros de categoría aplicados."
+                                            actionLabel="Restablecer Filtros"
+                                            onAction={() => {
+                                                setSearchQuery("");
+                                                setSelectedCategory("Todos");
+                                            }}
+                                        />
                                     </td>
                                 </tr>
                             ) : (

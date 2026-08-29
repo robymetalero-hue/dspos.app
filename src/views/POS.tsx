@@ -132,6 +132,7 @@ export default function POS() {
     } = useAppContext();
 
     const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
+    const [visibleCatalogLimit, setVisibleCatalogLimit] = useState(48);
     const executeCheckoutRef = useRef<any>(null);
     const isKioskLocked = (kioskMode || (user && user.role === 'vendedor')) && user?.role !== 'admin' && user?.role !== 'propietario';
 
@@ -1335,6 +1336,15 @@ export default function POS() {
         
         return filterAndRankProducts(categoryMatched, query);
     }, [products, debouncedSearch, selectedCategory]);
+
+    // Reset visible catalog limit on search/category change
+    React.useEffect(() => {
+        setVisibleCatalogLimit(48);
+    }, [debouncedSearch, selectedCategory]);
+
+    const visibleProducts = React.useMemo(() => {
+        return filtered.slice(0, visibleCatalogLimit);
+    }, [filtered, visibleCatalogLimit]);
 
     const subtotal = React.useMemo(() => {
         return cart.reduce((acc, item) => acc + (getCartItemPriceBs(item) * item.cartQuantity), 0);
@@ -2849,7 +2859,7 @@ export default function POS() {
                     }
                 >
                     <AnimatePresence >
-                        {filtered.map(p => {
+                        {visibleProducts.map(p => {
                             const lowStock = p.stock <= p.stock_alarm;
                             const itemInCart = cart.find(c => c.id === p.id);
                             const qtyInCart = itemInCart ? itemInCart.cartQuantity : 0;
@@ -3179,6 +3189,25 @@ export default function POS() {
                         })}
                     </AnimatePresence>
                 </motion.div>
+
+                {filtered.length > visibleCatalogLimit && (
+                    <div className="mt-6 mb-4 flex flex-col sm:flex-row items-center justify-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setVisibleCatalogLimit(prev => prev + 48)}
+                            className="px-5 py-2.5 rounded-2xl bg-indigo-600/10 hover:bg-indigo-600/20 active:scale-95 text-indigo-600 dark:text-indigo-400 font-bold text-xs transition duration-150 flex items-center gap-2 cursor-pointer border border-indigo-500/20"
+                        >
+                            <span>Mostrar más productos ({visibleCatalogLimit} de {filtered.length})</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setVisibleCatalogLimit(filtered.length)}
+                            className="px-3.5 py-2 rounded-xl text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-semibold text-[11px] transition cursor-pointer"
+                        >
+                            <span>Mostrar todos</span>
+                        </button>
+                    </div>
+                )}
 
                 {hasMoreProducts && (
                     <div className="mt-8 flex justify-center pb-8">

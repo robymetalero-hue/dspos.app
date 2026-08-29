@@ -97,9 +97,15 @@ function saveLocalStorageQueue(queue: OfflineSale[]): void {
  * Saves a sale to the offline queue
  */
 export async function saveOfflineSale(salePayload: any, clientName?: string, clientPhone?: string): Promise<OfflineSale> {
+    // Ensure payload has a unique idempotency clientOperationId
+    const safePayload = {
+        ...salePayload,
+        clientOperationId: salePayload.clientOperationId || salePayload.client_operation_id || `offline_op_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+    };
+
     const offlineSale: OfflineSale = {
         id: `offline_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        salePayload,
+        salePayload: safePayload,
         clientName,
         clientPhone,
         createdAt: new Date().toISOString()

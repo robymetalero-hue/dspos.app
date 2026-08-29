@@ -1048,51 +1048,60 @@ export function HistorialVentasView() {
     return (
         <div 
             id="historial-ventas-view" 
-            className="p-5 md:p-6 overflow-y-auto h-full flex flex-col gap-5 select-none bg-neutral-50/50 dark:bg-[#070a10] touch-momentum"
+            className="p-4 sm:p-5 md:p-6 overflow-y-auto h-full flex flex-col gap-4 sm:gap-5 select-none bg-neutral-50/60 dark:bg-[#070a10] touch-momentum"
             style={outerScroll.style}
             {...outerScroll.touchHandlers}
         >
             {/* Header Box */}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-[#0c111e] p-5 rounded-3xl border border-slate-200/60 dark:border-slate-850">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3.5 bg-white dark:bg-[#0c111e] p-4 sm:p-5 rounded-3xl border border-slate-200/80 dark:border-slate-850 shadow-xs">
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                        <Receipt className="text-blue-500 shrink-0" size={16} />
-                        <h1 className="text-base font-extrabold text-slate-800 dark:text-white uppercase tracking-wider">Historial de Ventas Fiscales</h1>
+                        <div className="p-2 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-xl">
+                            <Receipt size={18} />
+                        </div>
+                        <div>
+                            <h1 className="text-base font-extrabold text-slate-850 dark:text-white uppercase tracking-wider">Historial de Ventas</h1>
+                            <p className="text-[11px] text-slate-400 font-medium hidden sm:block">Registro granular, auditoría fiscal y seguimiento de ventas por período.</p>
+                        </div>
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-1.5 font-semibold">Consulte el rendimiento y realice un seguimiento granular de sus ventas por fecha y período.</p>
                 </div>
                 
-                {/* Custom Date Range Picker Container */}
-                <div className="flex items-center gap-2.5">
+                {/* Actions Toolbar */}
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
                     <DateRangePicker 
                         value={dateRange} 
                         onChange={(r) => {
                             setDateRange(r);
-                            setSelectedSale(null); // Deselect on filter change
+                            setSelectedSale(null);
                         }} 
+                        className="flex-1 sm:flex-none"
                     />
-                </div>
 
-                <button 
-                    onClick={loadSales}
-                    className="w-10 h-10 flex items-center justify-center bg-slate-50 dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 text-slate-600 rounded-xl transition cursor-pointer self-stretch md:self-auto"
-                >
-                    <RefreshCw size={15} className={loading ? "animate-spin" : ""} />
-                </button>
+                    <button 
+                        onClick={() => loadSales()}
+                        className="p-2.5 bg-slate-50 dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-2xl transition cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 shrink-0 shadow-xs"
+                        title="Actualizar Ventas"
+                    >
+                        <RefreshCw size={15} className={loading ? "animate-spin text-indigo-600" : ""} />
+                    </button>
+                </div>
             </div>
 
             {/* Performance Tracking Stats Bento Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2.5 sm:gap-3.5">
                 {/* 1. Flujo de Caja (Total Recaudado) */}
-                <div className="bg-white dark:bg-[#0c111e] p-4 rounded-2xl border border-slate-200/60 dark:border-slate-850 shadow-sm flex flex-col gap-1.5 transition hover:scale-[1.01]">
-                    <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                        <span className="text-[9px] uppercase font-bold tracking-widest text-slate-400">FLUJO TOTAL</span>
+                <div className="bg-white dark:bg-[#0c111e] p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-slate-850 shadow-xs flex flex-col justify-between transition hover:border-indigo-500/30">
+                    <div className="flex items-center gap-1.5 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0"></span>
+                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 truncate">Flujo Total</span>
                     </div>
-                    <span className="text-base font-black text-indigo-600 dark:text-indigo-400 font-mono">
-                        Bs. {totalEarnings.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                    <span className="text-[9px] text-slate-400 font-semibold truncate">
+                    <div className="flex items-baseline gap-1 my-0.5">
+                        <span className="text-[10px] font-bold text-slate-400">Bs.</span>
+                        <span className="text-sm sm:text-base font-black text-indigo-600 dark:text-indigo-400 font-mono tracking-tight whitespace-nowrap">
+                            {totalEarnings.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                    </div>
+                    <span className="text-[9px] text-slate-400 font-medium truncate">
                         Recaudación bruta
                     </span>
                 </div>
@@ -1100,95 +1109,118 @@ export function HistorialVentasView() {
                 {/* 2. Capital Invertido */}
                 {user?.role === 'admin' && (
                     <>
-                        <div className="bg-white dark:bg-[#0c111e] p-4 rounded-2xl border border-slate-200/60 dark:border-slate-850 shadow-sm flex flex-col gap-1.5 transition hover:scale-[1.01]">
-                            <div className="flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                                <span className="text-[9px] uppercase font-bold tracking-widest text-slate-400">CAPITAL INVERTIDO</span>
+                        <div className="bg-white dark:bg-[#0c111e] p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-slate-850 shadow-xs flex flex-col justify-between transition hover:border-amber-500/30">
+                            <div className="flex items-center gap-1.5 mb-1">
+                                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+                                <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 truncate">Capital</span>
                             </div>
-                            <span className="text-base font-black text-amber-600 dark:text-amber-550 font-mono">
-                                Bs. {totalCapital.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                            <span className="text-[9px] text-slate-400 font-semibold truncate animate-pulse">
-                                Costo de productos
+                            <div className="flex items-baseline gap-1 my-0.5">
+                                <span className="text-[10px] font-bold text-slate-400">Bs.</span>
+                                <span className="text-sm sm:text-base font-black text-amber-600 dark:text-amber-400 font-mono tracking-tight whitespace-nowrap">
+                                    {totalCapital.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                            </div>
+                            <span className="text-[9px] text-slate-400 font-medium truncate">
+                                Costo inventario
                             </span>
                         </div>
 
                         {/* 3. Utilidad / Ganancia Generada */}
-                        <div className="bg-white dark:bg-[#0c111e] p-4 rounded-2xl border-2 border-emerald-550/30 dark:border-emerald-500/20 shadow-sm flex flex-col gap-1.5 transition hover:scale-[1.02] bg-emerald-50/10 dark:bg-emerald-950/5">
-                            <div className="flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-                                <span className="text-[9px] uppercase font-bold tracking-widest text-emerald-600 dark:text-emerald-400">GANANCIA GENERADA</span>
+                        <div className="bg-white dark:bg-[#0c111e] p-3.5 sm:p-4 rounded-2xl border border-emerald-500/30 dark:border-emerald-500/20 shadow-xs flex flex-col justify-between transition hover:border-emerald-500/50 bg-emerald-50/20 dark:bg-emerald-950/10">
+                            <div className="flex items-center gap-1.5 mb-1">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                                <span className="text-[9px] uppercase font-extrabold tracking-wider text-emerald-600 dark:text-emerald-400 truncate">Ganancia</span>
                             </div>
-                            <span className="text-lg font-black text-emerald-600 dark:text-emerald-400 font-mono">
-                                Bs. {totalProfit.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                            <span className="text-[9px] text-emerald-600 dark:text-emerald-500 font-semibold truncate">
-                                Rentabilidad neta
+                            <div className="flex items-baseline gap-1 my-0.5">
+                                <span className="text-[10px] font-bold text-emerald-600/70 dark:text-emerald-400/70">Bs.</span>
+                                <span className="text-sm sm:text-base font-black text-emerald-600 dark:text-emerald-400 font-mono tracking-tight whitespace-nowrap">
+                                    {totalProfit.toLocaleString('es-BO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                            </div>
+                            <span className="text-[9px] text-emerald-600/80 dark:text-emerald-400/80 font-medium truncate">
+                                Utilidad neta
                             </span>
                         </div>
 
                         {/* 4. Margen de Beneficio */}
-                        <div className="bg-white dark:bg-[#0c111e] p-4 rounded-2xl border border-slate-200/60 dark:border-slate-850 shadow-sm flex flex-col gap-1.5 transition hover:scale-[1.01]">
-                            <div className="flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-violet-500"></span>
-                                <span className="text-[9px] uppercase font-bold tracking-widest text-slate-400">MARGEN NETA</span>
+                        <div className="bg-white dark:bg-[#0c111e] p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-slate-850 shadow-xs flex flex-col justify-between transition hover:border-violet-500/30">
+                            <div className="flex items-center gap-1.5 mb-1">
+                                <span className="w-2 h-2 rounded-full bg-violet-500 shrink-0"></span>
+                                <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 truncate">Margen</span>
                             </div>
-                            <span className="text-base font-black text-violet-600 dark:text-violet-400 font-mono">
-                                {profitMargin.toFixed(1)}%
-                            </span>
-                            <span className="text-[9px] text-slate-400 font-semibold truncate animate-pulse">
-                                Retorno sobre ventas
+                            <div className="flex items-baseline gap-1 my-0.5">
+                                <span className="text-sm sm:text-base font-black text-violet-600 dark:text-violet-400 font-mono tracking-tight whitespace-nowrap">
+                                    {profitMargin.toFixed(1)}%
+                                </span>
+                            </div>
+                            <span className="text-[9px] text-slate-400 font-medium truncate">
+                                Retorno s/ venta
                             </span>
                         </div>
                     </>
                 )}
 
                 {/* 5. Boletas de Venta */}
-                <div className="bg-white dark:bg-[#0c111e] p-4 rounded-2xl border border-slate-200/60 dark:border-slate-850 shadow-sm flex flex-col gap-1.5 transition hover:scale-[1.01]">
-                    <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
-                        <span className="text-[9px] uppercase font-bold tracking-widest text-slate-400">TRANSACCIONES</span>
+                <div className="bg-white dark:bg-[#0c111e] p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-slate-850 shadow-xs flex flex-col justify-between transition hover:border-sky-500/30">
+                    <div className="flex items-center gap-1.5 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0"></span>
+                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 truncate">Ventas</span>
                     </div>
-                    <span className="text-base font-black text-sky-600 dark:text-sky-400 font-mono">
-                        {transactionsCount} Boletas
-                    </span>
-                    <span className="text-[9px] text-slate-400 font-semibold truncate">
-                        En: {dateRange.preset === 'all' ? 'Histórico' : (dateRange.preset === 'custom' ? `${dateRange.startDate} Al ${dateRange.endDate}` : 'Filtro Activo')}
+                    <div className="flex items-baseline gap-1 my-0.5">
+                        <span className="text-sm sm:text-base font-black text-sky-600 dark:text-sky-400 font-mono tracking-tight whitespace-nowrap">
+                            {transactionsCount}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400">tickets</span>
+                    </div>
+                    <span className="text-[9px] text-slate-400 font-medium truncate">
+                        {dateRange.preset === 'all' ? 'Todo historial' : (dateRange.preset === 'today' ? 'Hoy' : 'En período')}
                     </span>
                 </div>
 
                 {/* 6. Artículos / Ticket Promedio */}
-                <div className="bg-white dark:bg-[#0c111e] p-4 rounded-2xl border border-slate-200/60 dark:border-slate-850 shadow-sm flex flex-col gap-1.5 transition hover:scale-[1.01]">
-                    <div className="flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-pink-500"></span>
-                        <span className="text-[9px] uppercase font-bold tracking-widest text-slate-400">CANT. & PROMEDIO</span>
+                <div className="bg-white dark:bg-[#0c111e] p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 dark:border-slate-850 shadow-xs flex flex-col justify-between transition hover:border-pink-500/30">
+                    <div className="flex items-center gap-1.5 mb-1">
+                        <span className="w-2 h-2 rounded-full bg-pink-500 shrink-0"></span>
+                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 truncate">Promedio</span>
                     </div>
-                    <span className="text-base font-black text-pink-600 dark:text-pink-400 font-mono truncate">
-                        {totalItemsCount} Uds.
-                    </span>
-                    <span className="text-[9px] text-slate-400 font-semibold truncate">
-                        Ticket prom: Bs. {averageTicket.toFixed(2)}
+                    <div className="flex items-baseline gap-1 my-0.5">
+                        <span className="text-[10px] font-bold text-slate-400">Bs.</span>
+                        <span className="text-sm sm:text-base font-black text-pink-600 dark:text-pink-400 font-mono tracking-tight whitespace-nowrap">
+                            {averageTicket.toFixed(2)}
+                        </span>
+                    </div>
+                    <span className="text-[9px] text-slate-400 font-medium truncate">
+                        {totalItemsCount} uds. vendidas
                     </span>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                {/* List portion */}
-                <div className="lg:col-span-2 bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200/60 dark:border-slate-850/60 overflow-hidden flex flex-col max-h-[700px]">
+            {/* Main Content Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5">
+                {/* Sales List Table & Mobile Cards */}
+                <div className="lg:col-span-2 bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200/80 dark:border-slate-850 overflow-hidden flex flex-col shadow-xs">
                     
                     {/* FILTROS INTELIGENTES */}
-                    <div className="p-4.5 border-b border-slate-100 dark:border-slate-850/80 bg-slate-50/50 dark:bg-slate-900/30 flex flex-col gap-3">
-                        <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="p-3.5 sm:p-4.5 border-b border-slate-100 dark:border-slate-850/80 bg-slate-50/50 dark:bg-slate-900/30 flex flex-col gap-3">
+                        <div className="flex flex-col sm:flex-row gap-2.5">
                             {/* Búsqueda */}
                             <div className="relative flex-1">
-                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={13} />
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={14} />
                                 <input 
                                     type="text"
-                                    placeholder="Buscar por ID, cliente, cajero..."
+                                    placeholder="Buscar por #Ticket, cliente, cajero..."
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full pl-8.5 pr-3 py-2 text-xs bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 dark:text-slate-200 font-semibold"
+                                    className="w-full pl-9 pr-8 py-2 text-xs bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-750 dark:text-slate-200 font-medium"
                                 />
+                                {searchQuery && (
+                                    <button 
+                                        onClick={() => setSearchQuery('')}
+                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                                    >
+                                        <X size={13} />
+                                    </button>
+                                )}
                             </div>
                             
                             {/* Cajero */}
@@ -1196,7 +1228,7 @@ export function HistorialVentasView() {
                                 <select
                                     value={selectedCashier}
                                     onChange={(e) => setSelectedCashier(e.target.value)}
-                                    className="w-full px-3 py-2 text-xs bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 dark:text-slate-200 font-extrabold"
+                                    className="w-full px-3 py-2 text-xs bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-750 dark:text-slate-200 font-bold cursor-pointer"
                                 >
                                     <option value="all">👤 Todos los cajeros</option>
                                     {cashiers.map(c => (
@@ -1210,7 +1242,7 @@ export function HistorialVentasView() {
                                 <select
                                     value={selectedPaymentMethod}
                                     onChange={(e) => setSelectedPaymentMethod(e.target.value)}
-                                    className="w-full px-3 py-2 text-xs bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 dark:text-slate-200 font-extrabold"
+                                    className="w-full px-3 py-2 text-xs bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-xl focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-750 dark:text-slate-200 font-bold cursor-pointer"
                                 >
                                     <option value="all">💳 Todos los métodos</option>
                                     {paymentMethods.map(m => (
@@ -1220,25 +1252,25 @@ export function HistorialVentasView() {
                             </div>
                         </div>
 
-                        {/* Rango de Montos */}
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs border-t border-slate-100 dark:border-slate-850/60 pt-3">
+                        {/* Rango de Montos & Reset */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs border-t border-slate-100 dark:border-slate-850/60 pt-2.5">
                             <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-extrabold uppercase tracking-wider shrink-0">Filtrar por Monto:</span>
+                                <span className="text-[10px] text-slate-400 dark:text-slate-500 font-extrabold uppercase tracking-wider shrink-0">Monto:</span>
                                 <div className="flex items-center gap-1.5">
                                     <input 
                                         type="number"
-                                        placeholder="Min"
+                                        placeholder="Mín"
                                         value={minAmount}
                                         onChange={(e) => setMinAmount(e.target.value)}
-                                        className="w-20 px-2 py-1 bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-lg text-center font-mono text-[11px] font-extrabold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 dark:text-slate-200"
+                                        className="w-18 px-2 py-1 bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-lg text-center font-mono text-[11px] font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-750 dark:text-slate-200"
                                     />
                                     <span className="text-slate-400 dark:text-slate-500 font-bold text-[10px]">a</span>
                                     <input 
                                         type="number"
-                                        placeholder="Max"
+                                        placeholder="Máx"
                                         value={maxAmount}
                                         onChange={(e) => setMaxAmount(e.target.value)}
-                                        className="w-20 px-2 py-1 bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-lg text-center font-mono text-[11px] font-extrabold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 dark:text-slate-200"
+                                        className="w-18 px-2 py-1 bg-white dark:bg-[#070c14] border border-slate-200 dark:border-slate-800 rounded-lg text-center font-mono text-[11px] font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-750 dark:text-slate-200"
                                     />
                                     <span className="text-slate-400 dark:text-slate-500 font-extrabold text-[10px]">Bs.</span>
                                 </div>
@@ -1254,80 +1286,148 @@ export function HistorialVentasView() {
                                         setMinAmount('');
                                         setMaxAmount('');
                                     }}
-                                    className="self-start sm:self-center text-[10px] text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 font-extrabold uppercase tracking-wider cursor-pointer transition"
+                                    className="self-start sm:self-center text-[10px] text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 font-extrabold uppercase tracking-wider cursor-pointer transition"
                                 >
-                                    Limpiar Filtros
+                                    Restablecer Filtros
                                 </button>
                             )}
                         </div>
                     </div>
 
+                    {/* Sales Records Container */}
                     <div 
-                        className="overflow-y-auto touch-momentum"
+                        className="overflow-y-auto touch-momentum max-h-[580px]"
                         style={listScroll.style}
                         {...listScroll.touchHandlers}
                     >
-                        <table className="w-full text-left">
-                            <thead className="sticky top-0 bg-[#f8fafc] dark:bg-[#080d15] border-b border-slate-150 dark:border-slate-850 text-[9px] font-bold text-slate-400 uppercase tracking-widest z-10">
-                                <tr>
-                                    <th className="p-4 pl-6">ID Ticket</th>
-                                    <th className="p-4 hidden sm:table-cell">Fecha / Hora</th>
-                                    <th className="p-4">Cliente</th>
-                                    <th className="p-4 text-center hidden md:table-cell">Método</th>
-                                    <th className="p-4 text-right hidden md:table-cell">Cant. Ítems</th>
-                                    <th className="p-4 text-right pr-6">Total Cobrado</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 dark:divide-slate-850/40 text-[11px] font-bold">
-                                {filteredSales.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={6} className="p-12 text-center text-slate-400">
-                                            Ninguna venta registrada en este período.
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    filteredSales.map(sale => (
-                                        <tr 
+                        {/* Mobile Cards View (< 640px) */}
+                        <div className="sm:hidden divide-y divide-slate-100 dark:divide-slate-850">
+                            {filteredSales.length === 0 ? (
+                                <div className="p-8 text-center text-slate-400 flex flex-col items-center gap-2">
+                                    <Receipt size={28} className="opacity-40" />
+                                    <span className="text-xs font-semibold">No se encontraron ventas en este rango.</span>
+                                </div>
+                            ) : (
+                                filteredSales.map(sale => {
+                                    const isSelected = selectedSale?.id === sale.id;
+                                    return (
+                                        <div
                                             key={sale.id}
                                             onClick={() => loadSaleDetails(sale)}
-                                            className={`cursor-pointer transition hover:bg-slate-50/50 dark:hover:bg-[#0c111f]/60 ${selectedSale?.id === sale.id ? 'bg-indigo-50/40 dark:bg-indigo-950/20 text-indigo-600 dark:text-indigo-400' : ''}`}
+                                            className={`p-3.5 transition active:scale-[0.99] cursor-pointer flex items-center justify-between gap-3 ${
+                                                isSelected 
+                                                    ? 'bg-indigo-50/60 dark:bg-indigo-950/30 border-l-4 border-indigo-600' 
+                                                    : 'hover:bg-slate-50/80 dark:hover:bg-slate-900/40'
+                                            }`}
                                         >
-                                            <td className="p-4 pl-6 font-mono font-bold text-slate-400">#{sale.id}</td>
-                                            <td className="p-4 font-normal text-slate-500 dark:text-slate-400 hidden sm:table-cell">
-                                                {new Date(sale.created_at).toLocaleString()}
-                                            </td>
-                                            <td className="p-4 font-bold text-slate-800 dark:text-slate-200 uppercase truncate max-w-[120px]">
-                                                {sale.client_name || 'Particular'}
-                                            </td>
-                                            <td className="p-4 text-center hidden md:table-cell">
-                                                <span className={`text-[9px] px-2 py-0.5 rounded-lg border uppercase tracking-wider ${
-                                                    sale.payment_method === 'Efectivo' 
-                                                        ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/10' 
-                                                        : sale.payment_method === 'Tarjeta' 
-                                                            ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/10' 
-                                                            : sale.payment_method === 'Crédito'
-                                                                ? 'bg-amber-500/10 text-amber-600 border-amber-500/10'
-                                                                : 'bg-indigo-500/10 text-indigo-600 border-indigo-500/10'
-                                                }`}>
-                                                    {sale.payment_method}
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="font-mono font-bold text-xs text-indigo-600 dark:text-indigo-400">
+                                                        #{sale.id}
+                                                    </span>
+                                                    <span className="text-[10px] text-slate-400">
+                                                        {new Date(sale.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </span>
+                                                    <span className={`text-[9px] px-1.5 py-0.2 rounded-md font-bold uppercase tracking-wider ${
+                                                        sale.payment_method === 'Efectivo' 
+                                                            ? 'bg-emerald-500/10 text-emerald-600' 
+                                                            : 'bg-indigo-500/10 text-indigo-600'
+                                                    }`}>
+                                                        {sale.payment_method}
+                                                    </span>
+                                                </div>
+                                                <div className="font-extrabold text-xs text-slate-800 dark:text-slate-200 truncate uppercase">
+                                                    {sale.client_name || 'Cliente Particular'}
+                                                </div>
+                                                <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                                                    <span>{sale.item_count || 1} ítems</span>
+                                                    <span>•</span>
+                                                    <span>@{sale.user_name || 'admin'}</span>
+                                                </div>
+                                            </div>
+                                            <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                                                <span className="font-mono font-black text-sm text-slate-850 dark:text-white">
+                                                    Bs. {sale.total.toFixed(2)}
                                                 </span>
-                                            </td>
-                                            <td className="p-4 text-right font-mono text-slate-500 hidden md:table-cell">{sale.item_count} pz</td>
-                                            <td className="p-4 text-right pr-6 font-black text-slate-800 dark:text-slate-100 font-mono text-xs">
-                                                {sale.currency === 'USD' ? '$' : 'Bs.'} {sale.total.toFixed(2)}
+                                                <ChevronRight size={14} className="text-slate-400" />
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+
+                        {/* Desktop Table View (>= 640px) */}
+                        <div className="hidden sm:block">
+                            <table className="w-full text-left">
+                                <thead className="sticky top-0 bg-[#f8fafc] dark:bg-[#080d15] border-b border-slate-150 dark:border-slate-850 text-[9px] font-bold text-slate-400 uppercase tracking-widest z-10">
+                                    <tr>
+                                        <th className="p-3.5 pl-5"># Ticket</th>
+                                        <th className="p-3.5">Fecha y Hora</th>
+                                        <th className="p-3.5">Cliente</th>
+                                        <th className="p-3.5 text-center">Método</th>
+                                        <th className="p-3.5 text-right">Ítems</th>
+                                        <th className="p-3.5 text-right pr-5">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 dark:divide-slate-850/50 text-[11px] font-bold">
+                                    {filteredSales.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="p-10 text-center text-slate-400 font-medium">
+                                                Ninguna venta registrada en este período seleccionado.
                                             </td>
                                         </tr>
-                                    ))
-                                )}
-                            </tbody>
-                        </table>
+                                    ) : (
+                                        filteredSales.map(sale => {
+                                            const isSelected = selectedSale?.id === sale.id;
+                                            return (
+                                                <tr 
+                                                    key={sale.id}
+                                                    onClick={() => loadSaleDetails(sale)}
+                                                    className={`cursor-pointer transition hover:bg-slate-50/70 dark:hover:bg-[#0c111f]/60 ${
+                                                        isSelected 
+                                                            ? 'bg-indigo-50/50 dark:bg-indigo-950/25 text-indigo-600 dark:text-indigo-400' 
+                                                            : ''
+                                                    }`}
+                                                >
+                                                    <td className="p-3.5 pl-5 font-mono font-bold text-slate-400">#{sale.id}</td>
+                                                    <td className="p-3.5 font-normal text-slate-500 dark:text-slate-400">
+                                                        {new Date(sale.created_at).toLocaleString()}
+                                                    </td>
+                                                    <td className="p-3.5 font-bold text-slate-800 dark:text-slate-200 uppercase truncate max-w-[140px]">
+                                                        {sale.client_name || 'Particular'}
+                                                    </td>
+                                                    <td className="p-3.5 text-center">
+                                                        <span className={`text-[9px] px-2 py-0.5 rounded-lg border uppercase tracking-wider font-extrabold ${
+                                                            sale.payment_method === 'Efectivo' 
+                                                                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' 
+                                                                : sale.payment_method === 'Tarjeta' 
+                                                                    ? 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20' 
+                                                                    : sale.payment_method === 'Crédito'
+                                                                        ? 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+                                                                        : 'bg-indigo-500/10 text-indigo-600 border-indigo-500/20'
+                                                        }`}>
+                                                            {sale.payment_method}
+                                                        </span>
+                                                    </td>
+                                                    <td className="p-3.5 text-right font-mono text-slate-500 font-semibold">{sale.item_count} pz</td>
+                                                    <td className="p-3.5 text-right pr-5 font-black text-slate-850 dark:text-white font-mono text-xs">
+                                                        {sale.currency === 'USD' ? '$' : 'Bs.'} {sale.total.toFixed(2)}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
                         
                         {hasMoreSales && (
-                            <div className="p-4 flex justify-center border-t border-slate-100 dark:border-slate-850/60 bg-white/50 dark:bg-black/10">
+                            <div className="p-3.5 flex justify-center border-t border-slate-100 dark:border-slate-850/60 bg-white/50 dark:bg-black/10">
                                 <button
                                     onClick={loadMoreSales}
                                     disabled={loadingMore}
-                                    className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-sans text-xs font-bold transition duration-200 shadow-md shadow-indigo-500/10 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs transition duration-200 shadow-sm disabled:opacity-50 flex items-center gap-2 cursor-pointer"
                                 >
                                     {loadingMore ? (
                                         <>
@@ -1335,7 +1435,7 @@ export function HistorialVentasView() {
                                             Cargando...
                                         </>
                                     ) : (
-                                        'Cargar Más Registro Histórico'
+                                        'Cargar Más Registros'
                                     )}
                                 </button>
                             </div>
@@ -1343,26 +1443,31 @@ export function HistorialVentasView() {
                     </div>
                 </div>
 
-                {/* Details card section */}
-                <div className="hidden lg:flex bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200/60 dark:border-slate-850 p-5 flex-col gap-4">
+                {/* Details card section (Desktop side panel) */}
+                <div className="hidden lg:flex bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200/80 dark:border-slate-850 p-5 flex-col gap-4 shadow-xs">
                     {selectedSale ? (
                         <div className="flex flex-col gap-4">
                             <div className="flex justify-between items-start border-b border-slate-100 dark:border-slate-850 pb-3">
                                 <div>
-                                    <h3 className="font-extrabold text-xs uppercase tracking-wider text-slate-755 dark:text-slate-300">Ticket #{selectedSale.id}</h3>
+                                    <div className="flex items-center gap-2">
+                                        <h3 className="font-extrabold text-sm uppercase tracking-wider text-slate-850 dark:text-white">Ticket #{selectedSale.id}</h3>
+                                        <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold px-2 py-0.5 rounded-md">
+                                            {selectedSale.payment_method}
+                                        </span>
+                                    </div>
                                     <span className="text-[10px] text-slate-400 font-normal block mt-1">{new Date(selectedSale.created_at).toLocaleString()}</span>
                                 </div>
                             </div>
 
-                            <span className="text-[9px] font-extrabold uppercase tracking-widest text-slate-450">Desglose de Artículos</span>
-                            <div className="flex flex-col gap-2 overflow-y-auto max-h-[180px] border border-slate-100 dark:border-slate-850/60 p-2 rounded-2xl bg-neutral-50/30 dark:bg-black/10">
+                            <span className="text-[9px] font-extrabold uppercase tracking-widest text-slate-400">Desglose de Artículos</span>
+                            <div className="flex flex-col gap-2 overflow-y-auto max-h-[200px] border border-slate-100 dark:border-slate-850/60 p-2 rounded-2xl bg-neutral-50/50 dark:bg-black/10">
                                 {saleItems.map((item, index) => (
-                                    <div key={index} className="flex justify-between items-center text-xs p-2.5 rounded-xl bg-white dark:bg-[#080d14] border border-slate-105 dark:border-slate-850">
+                                    <div key={index} className="flex justify-between items-center text-xs p-2.5 rounded-xl bg-white dark:bg-[#080d14] border border-slate-150 dark:border-slate-850">
                                         <div className="min-w-0 pr-3">
-                                            <h4 className="font-bold text-slate-800 dark:text-slate-100 uppercase truncate leading-none mb-1.5">{item.product_name}</h4>
-                                            <span className="text-[9px] font-mono text-slate-450 bg-slate-50 dark:bg-black/20 p-1 rounded font-bold">SKU {item.sku}</span>
+                                            <h4 className="font-bold text-slate-800 dark:text-slate-100 uppercase truncate leading-none mb-1">{item.product_name}</h4>
+                                            <span className="text-[9px] font-mono text-slate-400 bg-slate-50 dark:bg-black/20 px-1 py-0.5 rounded font-bold">SKU {item.sku}</span>
                                         </div>
-                                        <div className="text-right">
+                                        <div className="text-right shrink-0">
                                             <span className="font-mono font-extrabold text-slate-700 dark:text-slate-300 block">
                                                 {item.quantity} pz x {selectedSale.currency === 'USD' ? '$' : 'Bs.'}{item.price.toFixed(2)}
                                             </span>
@@ -1374,20 +1479,20 @@ export function HistorialVentasView() {
                                 ))}
                             </div>
 
-                            <div className="border-t border-slate-100 dark:border-slate-850 pt-3.5 flex flex-col gap-2">
+                            <div className="border-t border-slate-100 dark:border-slate-850 pt-3 flex flex-col gap-1.5">
                                 <div className="flex justify-between items-center text-xs font-bold text-slate-400">
-                                    <span>Parcial:</span>
-                                    <span className="font-mono">{selectedSale.currency === 'USD' ? '$' : 'Bs.'} {(selectedSale.total + selectedSale.discount).toFixed(2)}</span>
+                                    <span>Subtotal:</span>
+                                    <span className="font-mono">{selectedSale.currency === 'USD' ? '$' : 'Bs.'} {(selectedSale.total + (selectedSale.discount || 0)).toFixed(2)}</span>
                                 </div>
                                 {selectedSale.discount > 0 && (
-                                    <div className="flex justify-between items-center text-xs font-bold text-red-500">
-                                        <span>Descuento aplicado:</span>
+                                    <div className="flex justify-between items-center text-xs font-bold text-rose-500">
+                                        <span>Descuento:</span>
                                         <span className="font-mono">-{selectedSale.currency === 'USD' ? '$' : 'Bs.'} {selectedSale.discount.toFixed(2)}</span>
                                     </div>
                                 )}
-                                <div className="flex justify-between items-center border-t border-dashed border-slate-200 dark:border-slate-800 pt-2 text-sm font-extrabold text-slate-705 dark:text-slate-205">
+                                <div className="flex justify-between items-center border-t border-dashed border-slate-200 dark:border-slate-800 pt-2 text-sm font-extrabold text-slate-800 dark:text-white">
                                     <span>TOTAL:</span>
-                                    <span className="font-mono text-base font-black text-blue-600 dark:text-blue-400">
+                                    <span className="font-mono text-base font-black text-indigo-600 dark:text-indigo-400">
                                         {selectedSale.currency === 'USD' ? '$' : 'Bs.'} {selectedSale.total.toFixed(2)} {selectedSale.currency || 'BOB'}
                                     </span>
                                 </div>
@@ -1397,24 +1502,24 @@ export function HistorialVentasView() {
                             <div className="border-t border-slate-100 dark:border-slate-850 pt-3 flex flex-col gap-2">
                                 <button
                                     onClick={() => setShowDetailModal(true)}
-                                    className="w-full py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 text-slate-800 dark:text-white font-extrabold text-[11px] rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all border border-slate-200/60 dark:border-slate-750"
+                                    className="w-full py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-850 dark:hover:bg-slate-800 text-slate-800 dark:text-white font-extrabold text-xs rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all border border-slate-200/60 dark:border-slate-750"
                                 >
-                                    <Eye size={12} /> Ver Detalle Completo
+                                    <Eye size={13} /> Ver Detalle Completo
                                 </button>
                                 
                                 <div className="grid grid-cols-2 gap-2">
                                     <button
                                         onClick={() => handleReprintPDF(selectedSale, saleItems)}
-                                        className="py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-[11px] rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer uppercase transition-all"
+                                        className="py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer uppercase transition-all shadow-xs"
                                     >
-                                        <Printer size={12} /> Reimprimir
+                                        <Printer size={13} /> Reimprimir
                                     </button>
                                     
                                     <button
                                         onClick={() => triggerShareOptions(selectedSale, saleItems)}
-                                        className="py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                                        className="py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-xs"
                                     >
-                                        <Share2 size={12} /> Compartir
+                                        <Share2 size={13} /> Compartir
                                     </button>
                                 </div>
 
@@ -1423,17 +1528,17 @@ export function HistorialVentasView() {
                                         localStorage.setItem('auto_refund_sale_id', selectedSale.id.toString());
                                         setView('devoluciones');
                                     }}
-                                    className="w-full py-2.5 mt-1 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/20 dark:hover:bg-rose-950/35 text-rose-600 dark:text-rose-400 font-extrabold text-[11px] rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all border border-rose-200/50 dark:border-rose-900/30 uppercase"
+                                    className="w-full py-2 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/20 dark:hover:bg-rose-950/35 text-rose-600 dark:text-rose-400 font-extrabold text-xs rounded-xl tracking-wider flex items-center justify-center gap-1.5 cursor-pointer transition-all border border-rose-200/50 dark:border-rose-900/30 uppercase"
                                 >
-                                    <Undo2 size={12} /> Realizar Devolución
+                                    <Undo2 size={13} /> Devolución
                                 </button>
                             </div>
                         </div>
                     ) : (
-                        <div className="flex flex-col items-center justify-center py-20 text-center text-slate-405 gap-2.5">
-                            <Receipt size={32} className="text-slate-201 dark:text-slate-800 opacity-80" />
-                            <span className="text-xs font-black uppercase tracking-wider">Auditoría Cerrada</span>
-                            <p className="text-[10px] font-semibold max-w-[200px] mt-1 leading-normal">Haz clic sobre un ticket de venta en el historial para desplegar su desglose granular, auditoría o reimpresión.</p>
+                        <div className="flex flex-col items-center justify-center py-20 text-center text-slate-400 gap-2.5">
+                            <Receipt size={36} className="text-slate-300 dark:text-slate-700" />
+                            <span className="text-xs font-black uppercase tracking-wider text-slate-600 dark:text-slate-400">Detalle de Comprobante</span>
+                            <p className="text-[11px] font-medium max-w-[200px] mt-0.5 leading-normal">Selecciona una venta de la lista para ver sus ítems, reimprimir ticket o gestionar devoluciones.</p>
                         </div>
                     )}
                 </div>
@@ -1442,7 +1547,7 @@ export function HistorialVentasView() {
             {/* GRAND DETAILS MODAL FOR COMPLETE SALE AND ITEMIZATION */}
             <AnimatePresence>
                 {showDetailModal && selectedSale && (
-                    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+                    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4">
                         <motion.div 
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
@@ -1455,7 +1560,7 @@ export function HistorialVentasView() {
                             animate={{ scale: 1, opacity: 1, y: 0 }}
                             exit={{ scale: 0.95, opacity: 0, y: 15 }}
                             transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-                            className="bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200 dark:border-slate-850 p-6 max-w-xl w-full relative z-10 flex flex-col gap-4 shadow-2xl max-h-[90vh] overflow-hidden select-none"
+                            className="bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-200 dark:border-slate-850 p-5 sm:p-6 max-w-xl w-full relative z-10 flex flex-col gap-4 shadow-2xl max-h-[90vh] overflow-hidden select-none"
                         >
                             {/* Modal Header */}
                             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-850/60 shrink-0">

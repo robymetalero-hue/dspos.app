@@ -1,87 +1,179 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
     Lock, Eye, EyeOff, Sparkles, ShieldAlert, 
-    RefreshCw, UserCheck, KeySquare, Store
+    RefreshCw, UserCheck, KeySquare, Store, Zap
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { validateVersionOnLogin, CLIENT_VERSION } from '../utils/versionCheck';
 import { hardRefreshApp } from '../utils/appRefresh';
+import { 
+    getCachedUserByUsername, 
+    setCachedUserProfile, 
+    setCachedAuthToken, 
+    clearAuthCache 
+} from '../utils/localForageCache';
+import { User } from '../types';
 
 export default function LoginScreen() {
     const { setUser } = useAppContext();
-    const [username, setUsername] = useState('');
+    const [username, setUsername] = useState(() => {
+        return localStorage.getItem('last_logged_username') || '';
+    });
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     
     // Status states
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [isOptimisticValidating, setIsOptimisticValidating] = useState(false);
+    const [error, setError] = useState<string | null>(() => {
+        const savedErr = sessionStorage.getItem('gtr_login_last_error');
+        if (savedErr) {
+            sessionStorage.removeItem('gtr_login_last_error');
+            return savedErr;
+        }
+        return null;
+    });
+
+    useEffect(() => {
+        // Pre-fill username from last active session if available
+        const lastUser = localStorage.getItem('last_logged_username');
+        if (lastUser && !username) {
+            setUsername(lastUser);
+        }
+    }, []);
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!username.trim() || !password.trim()) {
+        const cleanUsername = username.trim();
+        const cleanPassword = password.trim();
+
+        if (!cleanUsername || !cleanPassword) {
             setError("Por favor, rellene todos los campos de acceso.");
             return;
         }
 
         setLoading(true);
         setError(null);
+        sessionStorage.removeItem('gtr_login_last_error');
+
+        // Check if we have cached profile for this user in localForage
+        let isKnownCachedUser = false;
+        let optimisticUser: User | null = null;
 
         try {
-            const res = await fetch('/api/auth/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: username.trim(), password })
-            });
-
-            const contentType = res.headers.get("content-type") || "";
-            let data: any = null;
-
-            if (contentType.includes("application/json")) {
-                try {
-                    data = await res.json();
-                } catch (jsonErr) {
-                    data = null;
-                }
+            const cached = await getCachedUserByUsername(cleanUsername);
+            if (cached && cached.username.toLowerCase() === cleanUsername.toLowerCase()) {
+                isKnownCachedUser = true;
+                optimisticUser = cached;
             }
+        } catch {}
 
-            if (res.ok && data) {
-                if (data.token) {
-                    localStorage.setItem('auth_token', data.token);
+        if (!optimisticUser) {
+            optimisticUser = {
+                id: 1,
+                username: cleanUsername,
+                role: cleanUsername.toLowerCase() === 'admin' ? 'admin' : 'trabajador',
+                permissions: {
+                    view_reports: true,
+                    edit_prices: true,
+                    view_inventory: true,
+                    apply_discounts: true,
+                    manage_credits: true,
+                    manage_caja: true,
+                    delete_sales: true,
+                    view_sales: true,
+                    access_ai: true
                 }
+            };
+        }
 
-                // Check version reported by server upon login against current CLIENT_VERSION
-                const versionCheck = await validateVersionOnLogin(data, {
-                    clientVersionOverride: CLIENT_VERSION,
-                    onVersionMismatch: (result) => {
-                        console.warn(`[Login] Client is outdated: local v${result.clientVersion} vs server v${result.serverVersion}`);
-                    }
+        // OPTIMISTIC LOADING: Instantly transition to app UI while validating in background
+        setIsOptimisticValidating(true);
+        setUser(optimisticUser);
+        localStorage.setItem('last_logged_username', cleanUsername);
+
+        // Perform authoritative validation in the background
+        (async () => {
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: cleanUsername, password: cleanPassword })
                 });
 
-                if (versionCheck.isOutdated) {
-                    setError(`Nueva versión disponible (v${versionCheck.serverVersion}). Actualizando terminal para garantizar la sincronización...`);
-                    await hardRefreshApp();
-                    return;
+                const contentType = res.headers.get("content-type") || "";
+                let data: any = null;
+
+                if (contentType.includes("application/json")) {
+                    try {
+                        data = await res.json();
+                    } catch {
+                        data = null;
+                    }
                 }
 
-                setUser(data.user);
-            } else if (data && data.error) {
-                setError(data.error);
-            } else {
-                if (res.status === 502 || res.status === 503 || res.status === 504) {
-                    setError("El servidor fiscal se está actualizando o reiniciando. Por favor reintente en unos segundos.");
-                } else if (res.status === 404) {
-                    setError("Servicio fiscal no disponible temporalmente. Por favor recargue la página.");
+                if (res.ok && data && data.user) {
+                    // Authoritative login success: update token, user profile and localForage
+                    if (data.token) {
+                        await setCachedAuthToken(data.token);
+                    }
+
+                    await setCachedUserProfile(data.user);
+                    setUser(data.user);
+
+                    // Check server version
+                    const versionCheck = await validateVersionOnLogin(data, {
+                        clientVersionOverride: CLIENT_VERSION,
+                        onVersionMismatch: (result) => {
+                            console.warn(`[Login] Client is outdated: local v${result.clientVersion} vs server v${result.serverVersion}`);
+                        }
+                    });
+
+                    if (versionCheck.isOutdated) {
+                        sessionStorage.setItem('gtr_login_last_error', `Nueva versión disponible (v${versionCheck.serverVersion}). Actualizando terminal...`);
+                        await hardRefreshApp();
+                        return;
+                    }
                 } else {
-                    setError("Credenciales inválidas de terminal de caja o respuesta no válida.");
+                    // Authoritative login rejected: Roll back optimistic session
+                    await clearAuthCache();
+                    setUser(null);
+
+                    let errMsg = "Credenciales inválidas de terminal de caja.";
+                    if (data && data.error) {
+                        errMsg = data.error;
+                    } else if (res.status === 502 || res.status === 503 || res.status === 504) {
+                        errMsg = "El servidor fiscal se está actualizando o reiniciando. Reintente en unos segundos.";
+                    } else if (res.status === 404) {
+                        errMsg = "Servicio fiscal no disponible temporalmente.";
+                    }
+                    sessionStorage.setItem('gtr_login_last_error', errMsg);
+                    setError(errMsg);
                 }
+            } catch (err: any) {
+                // If network is disconnected or server is temporarily unreachable
+                if (isKnownCachedUser) {
+                    // Retain cached session in offline mode
+                    window.dispatchEvent(new CustomEvent('triggerNotification', {
+                        detail: {
+                            message: 'Modo Offline: Sesión iniciada con credenciales cacheadas localmente.',
+                            type: 'warn'
+                        }
+                    }));
+                } else {
+                    // Rollback if there is no offline cache for this operator
+                    await clearAuthCache();
+                    setUser(null);
+                    const errMsg = "Error de conexión con el servidor fiscal: " + (err?.message || "Servicio no disponible");
+                    sessionStorage.setItem('gtr_login_last_error', errMsg);
+                    setError(errMsg);
+                }
+            } finally {
+                setLoading(false);
+                setIsOptimisticValidating(false);
             }
-        } catch (err: any) {
-            setError("Error de conexión con el servidor fiscal: " + (err?.message || "Servicio no disponible"));
-        } finally {
-            setLoading(false);
-        }
+        })();
     };
 
     return (
@@ -106,9 +198,12 @@ export default function LoginScreen() {
                         <h2 className="font-sans font-black text-2xl tracking-tight text-slate-850 dark:text-white leading-tight uppercase">
                             DIGITAL STORE
                         </h2>
-                        <p className="text-[10px] uppercase font-black tracking-widest text-[#6366f1] mt-1 pr-0.5">
-                            Sistema POS & Control de Acceso
-                        </p>
+                        <div className="flex items-center justify-center gap-1.5 mt-1">
+                            <Zap size={11} className="text-emerald-500" />
+                            <p className="text-[10px] uppercase font-black tracking-widest text-[#6366f1] pr-0.5">
+                                Acceso Instantáneo POS & Sincronización
+                            </p>
+                        </div>
                     </div>
                 </div>
 
@@ -146,6 +241,7 @@ export default function LoginScreen() {
                                 value={username}
                                 onChange={e => setUsername(e.target.value)}
                                 disabled={loading}
+                                autoFocus={!username}
                             />
                             <UserCheck size={14} className="absolute left-4 top-4.5 text-slate-400" />
                         </div>
@@ -166,6 +262,7 @@ export default function LoginScreen() {
                                 value={password}
                                 onChange={e => setPassword(e.target.value)}
                                 disabled={loading}
+                                autoFocus={!!username}
                             />
                             <Lock size={14} className="absolute left-4 top-4.5 text-slate-400" />
                             
@@ -185,17 +282,17 @@ export default function LoginScreen() {
                     <button 
                         type="submit"
                         disabled={loading}
-                        className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-black uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/10 cursor-pointer disabled:opacity-50 select-none mt-2"
+                        className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-black uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/10 cursor-pointer disabled:opacity-50 select-none mt-2 active:scale-[0.99]"
                     >
                         {loading ? (
                             <>
                                 <RefreshCw size={13} className="animate-spin" />
-                                Iniciando Sesión...
+                                <span>Iniciando Sesión Instantánea...</span>
                             </>
                         ) : (
                             <>
                                 <KeySquare size={13} />
-                                Ingresar al Sistema
+                                <span>Ingresar al Sistema</span>
                             </>
                         )}
                     </button>
@@ -207,7 +304,7 @@ export default function LoginScreen() {
                         GTR POS SECURE v2.0
                     </span>
                     <span className="text-[8px] font-bold text-slate-400 leading-none mt-1">
-                        Sesión HTTPS Encriptada de Capa Fiscal
+                        Caché local persistente con localForage & Validación en segundo plano
                     </span>
                 </div>
             </motion.div>

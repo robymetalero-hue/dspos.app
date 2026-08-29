@@ -17,6 +17,12 @@ import {
     getCachedAppState,
     getOfflineStats
 } from '../utils/offlineStorage';
+import {
+    getCachedUserProfile,
+    setCachedUserProfile,
+    getCachedMinimalProducts,
+    setCachedMinimalProducts
+} from '../utils/localForageCache';
 
 // Initialize Client-Side Firebase SDK with auto-detect long polling to prevent stream timeouts
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -205,7 +211,15 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [isInitializing, setIsInitializing] = useState(true);
+    const [isInitializing, setIsInitializing] = useState(() => {
+        try {
+            const hasCachedProds = !!localStorage.getItem('cached_products');
+            const hasUser = !!localStorage.getItem('user');
+            return !hasCachedProds && !hasUser;
+        } catch {
+            return false;
+        }
+    });
     const [kioskMode, setKioskMode] = useState(() => localStorage.getItem('kioskMode') === 'true');
     const [isOffline, setIsOffline] = useState(() => !window.navigator.onLine);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -455,17 +469,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
     }, []);
 
-    const fetchWithRetry = async (url: string, options?: RequestInit, retries = 3, delay = 800): Promise<Response> => {
+    const fetchWithRetry = async (url: string, options?: RequestInit, retries = 2, delay = 500): Promise<Response> => {
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
             throw new Error('Offline mode - network is disconnected');
         }
+        let timeoutId: any;
         try {
-            const response = await fetch(url, options);
+            let signal = options?.signal;
+            if (!signal && typeof AbortController !== 'undefined') {
+                const controller = new AbortController();
+                timeoutId = setTimeout(() => controller.abort(), 4000);
+                signal = controller.signal;
+            }
+            const response = await fetch(url, { ...options, signal });
+            if (timeoutId) clearTimeout(timeoutId);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             return response;
         } catch (error) {
+            if (timeoutId) clearTimeout(timeoutId);
             if (typeof navigator !== 'undefined' && !navigator.onLine) {
                 throw new Error('Offline mode - network is disconnected');
             }
@@ -512,6 +535,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 localStorage.removeItem('user');
                 localStorage.removeItem('auth_token');
             }
+            setCachedUserProfile(normalizedUser).catch(() => {});
         } catch (err) {
             console.error("Failed to save local user session state:", err);
         }
@@ -1010,11 +1034,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         root.style.setProperty('--rgb-direction', direction);
     }, [rgbSettings]);
 
-    // Pre-hydrate state from IndexedDB instantly on component mount
+    // Pre-hydrate state from localForage & IndexedDB instantly on component mount
     useEffect(() => {
-        const prehydrateFromIndexedDB = async () => {
+        const prehydrateFromLocalCache = async () => {
             try {
-                const [cachedProds, cachedClis, cachedDeps, cachedRcpt, cachedExRate, cachedSalesTabs] = await Promise.all([
+                const [
+                    cachedLfUser,
+                    cachedLfProds,
+                    cachedProds, 
+                    cachedClis, 
+                    cachedDeps, 
+                    cachedRcpt, 
+                    cachedExRate, 
+                    cachedSalesTabs
+                ] = await Promise.all([
+                    getCachedUserProfile(),
+                    getCachedMinimalProducts(),
                     getCachedAppState<Product[]>('cached_products'),
                     getCachedAppState<Client[]>('cached_clients'),
                     getCachedAppState<Department[]>('cached_departments'),
@@ -1023,9 +1058,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     getCachedAppState<SaleTab[]>('cached_sales_tabs')
                 ]);
 
-                if (cachedProds && cachedProds.length > 0) {
-                    setProducts(cachedProds);
-                    setTotalProducts(cachedProds.length);
+                if (cachedLfUser && (!user || user.username === 'none')) {
+                    setUserState(cachedLfUser);
+                }
+
+                const resolvedProds = (cachedLfProds && cachedLfProds.length > 0) 
+                    ? cachedLfProds 
+                    : (cachedProds && cachedProds.length > 0 ? cachedProds : null);
+
+                if (resolvedProds && resolvedProds.length > 0) {
+                    setProducts(resolvedProds);
+                    setTotalProducts(resolvedProds.length);
                 }
                 if (cachedClis && cachedClis.length > 0) setClients(cachedClis);
                 if (cachedDeps && cachedDeps.length > 0) setDepartments(cachedDeps);
@@ -1033,16 +1076,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (cachedExRate) setExchangeRate(cachedExRate);
                 if (cachedSalesTabs && cachedSalesTabs.length > 0) setTabs(cachedSalesTabs);
             } catch (err) {
-                console.warn("[IndexedDB] Hydration error:", err);
+                console.warn("[Cache] Hydration error:", err);
             }
         };
-        prehydrateFromIndexedDB();
+        prehydrateFromLocalCache();
     }, []);
 
     useEffect(() => {
         if (user && user.username && user.username !== 'none') {
-            setIsInitializing(true);
-            Promise.all([
+            const hasLocalData = products.length > 0 || !!localStorage.getItem('cached_products');
+            if (!hasLocalData) {
+                setIsInitializing(true);
+            } else {
+                setIsInitializing(false);
+            }
+
+            const safetyTimeout = setTimeout(() => {
+                setIsInitializing(false);
+            }, 1000);
+
+            Promise.allSettled([
                 fetchProducts(),
                 fetchClients(),
                 fetchExchangeRate(),
@@ -1050,7 +1103,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 fetchDepartments(),
                 fetchKioskMode()
             ]).finally(() => {
-                setTimeout(() => setIsInitializing(false), 800); // Elegant small delay for animation
+                clearTimeout(safetyTimeout);
+                setIsInitializing(false);
             });
         } else {
             setIsInitializing(false);
@@ -1153,6 +1207,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setHasMoreProducts(data.has_more);
                 localStorage.setItem('cached_products', JSON.stringify(data.products));
                 cacheAppState('cached_products', data.products);
+                setCachedMinimalProducts(data.products).catch(() => {});
             } else {
                 const arr = Array.isArray(data) ? data : [];
                 setProducts(arr);
@@ -1160,6 +1215,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 setHasMoreProducts(false);
                 localStorage.setItem('cached_products', JSON.stringify(arr));
                 cacheAppState('cached_products', arr);
+                setCachedMinimalProducts(arr).catch(() => {});
             }
             setIsOffline(false);
         } catch (e) {

@@ -8,6 +8,13 @@ import { startAutoBackupScheduler } from "./utils/driveBackupScheduler";
 import { hardRefreshApp } from "./utils/appRefresh";
 import { CLIENT_VERSION, compareClientWithServerVersion, validateVersionOnLogin } from "./utils/versionCheck";
 export { CLIENT_VERSION };
+import { 
+    initLocalForageCache, 
+    getCachedUserProfile, 
+    setCachedUserProfile, 
+    getCachedMinimalProducts, 
+    setCachedMinimalProducts 
+} from './utils/localForageCache';
 import PhysicalCountManager from './components/PhysicalCountManager';
 import AudioVoice from './components/AudioVoice';
 import OfflineStatusHUD from './components/OfflineStatusHUD';
@@ -302,6 +309,23 @@ function AppLayout() {
                 setGlobalNotification({ message: msg, type });
                 setTimeout(() => setGlobalNotification(null), 7000);
             });
+        }
+    }, [user]);
+
+    // localForage persistence cache layer for user profile and minimal product catalog
+    useEffect(() => {
+        initLocalForageCache();
+    }, []);
+
+    useEffect(() => {
+        if (products && products.length > 0) {
+            setCachedMinimalProducts(products);
+        }
+    }, [products]);
+
+    useEffect(() => {
+        if (user && (user.role as string) !== 'none' && user.username !== 'none') {
+            setCachedUserProfile(user);
         }
     }, [user]);
 

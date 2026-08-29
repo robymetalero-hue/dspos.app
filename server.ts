@@ -368,11 +368,9 @@ async function startServer() {
     };
   };
 
-  // Background Synchronization Middleware
-  // Intercepts read requests (GET) to automatically pull Firestore data in the background with a 30s cooldown.
-  // This guarantees multi-instance container synchronization across browser sessions while avoiding log noise.
-  let lastMiddlewarePullTimestamp = 0;
-  const MIDDLEWARE_PULL_COOLDOWN_MS = 30000;
+  // Background Synchronization: Non-blocking background sync with a 5-minute cooldown
+  let lastMiddlewarePullTimestamp = Date.now();
+  const MIDDLEWARE_PULL_COOLDOWN_MS = 5 * 60 * 1000;
 
   app.use("/api", (req, res, next) => {
     if (
@@ -919,7 +917,7 @@ Debes responder estrictamente usando el siguiente formato JSON. No incluyas otra
       });
 
       const response = await getAI().models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.7-flash",
         contents: parts,
         config: {
           systemInstruction,
@@ -1731,7 +1729,7 @@ DIRECTRICES CRÍTICAS PARA GARANTIZAR LA MÁXIMA PRECISIÓN Y EVITAR LA IMPROVIS
 Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicado o texto periférico fuera de su estructura.`;
 
       const response = await getAI().models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.7-flash",
         contents: text,
         config: {
           systemInstruction,
@@ -4934,10 +4932,20 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
-  // Get AI Insights
+  // Get AI Insights with Intelligent Cache and Quota Circuit Breaker
+  const insightsCache = new Map<string, { data: any[]; expiresAt: number }>();
+  let geminiQuotaCooldownUntil = 0;
+
   app.get("/api/dashboard/insights", async (req, res) => {
     try {
       const { startDate, endDate } = req.query;
+      const cacheKey = `${startDate || 'default'}_${endDate || 'default'}`;
+
+      const now = Date.now();
+      const cached = insightsCache.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        return res.json(cached.data);
+      }
       
       let dateFilter = "substr(s.created_at, 1, 10) >= substr(date('now', '-7 days', 'localtime'), 1, 10)";
       if (startDate && endDate) {
@@ -4961,35 +4969,65 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         GROUP BY p.id
         ORDER BY qty DESC
         LIMIT 3
-      `).all();
+      `).all() as any[];
 
-      const prompt = `Actúa como un analista financiero experto en retail. Analiza los siguientes datos de ventas de los últimos días y los productos más vendidos. Dame 3 sugerencias breves, concretas y de alto impacto (máximo 2 oraciones cada una) para mejorar las ganancias, gestionar el inventario, o crear promociones. Datos de ventas diarias: ${JSON.stringify(sales)}. Productos top: ${JSON.stringify(topProducts)}. Responde EXCLUSIVAMENTE en un array JSON con el formato [{"title": "título corto", "description": "tu sugerencia"}]. No uses bloques de código markdown, solo el texto JSON crudo.`;
+      const lowStockCount = (db.prepare("SELECT COUNT(*) as count FROM products WHERE stock <= stock_alarm").get() as any)?.count || 0;
 
-      let insightsText = '[]';
-      try {
-        const ai = getAI();
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash', // Fallback to gemini-2.0-flash which might have less demand, or just catch it
-          contents: prompt
-        });
-        insightsText = response.text || '[]';
-      } catch (geminiError) {
-        console.warn("Gemini API warning, fallback used: ", geminiError.message);
-        // Fallback to static insights if API is overwhelmed
-        insightsText = JSON.stringify([
-            { title: "Servicio Ocupado", description: "El servicio de IA está experimentando alta demanda. Los insights generados estarán disponibles pronto." }
-        ]);
+      // Smart default analytics-driven insights as resilient baseline
+      const defaultInsights = [
+        {
+          title: topProducts.length > 0 ? `Impulso a "${topProducts[0].name}"` : "Promoción de Productos Estrella",
+          description: topProducts.length > 0
+            ? `Tu producto más vendido es "${topProducts[0].name}" (${topProducts[0].qty} u.). Crea combos o promociones cruzadas con artículos complementarios para elevar el ticket promedio.`
+            : "Impulsa ventas cruzadas agrupando productos de alta rotación con artículos de menor demanda."
+        },
+        {
+          title: lowStockCount > 0 ? `Atención a Stock Crítico (${lowStockCount} items)` : "Optimización de Inventario",
+          description: lowStockCount > 0
+            ? `Tienes ${lowStockCount} producto(s) en umbral de agotamiento. Realiza pedidos a proveedores antes de los picos de afluencia para evitar ventas perdidas.`
+            : "Los niveles de stock están saludables. Mantén un seguimiento continuo en horas pico de facturación."
+        },
+        {
+          title: "Estrategia de Métodos de Pago",
+          description: "Ofrece incentivos de pago rápido por QR o transferencia para agilizar las filas en caja física durante los horarios de mayor tráfico."
+        }
+      ];
+
+      let insights = defaultInsights;
+
+      if (process.env.GEMINI_API_KEY && now > geminiQuotaCooldownUntil) {
+        try {
+          const ai = getAI();
+          const prompt = `Actúa como un analista financiero experto en retail. Analiza los siguientes datos de ventas de los últimos días y los productos más vendidos. Dame 3 sugerencias breves, concretas y de alto impacto (máximo 2 oraciones cada una) para mejorar las ganancias, gestionar el inventario, o crear promociones. Datos de ventas diarias: ${JSON.stringify(sales)}. Productos top: ${JSON.stringify(topProducts)}. Responde EXCLUSIVAMENTE en un array JSON con el formato [{"title": "título corto", "description": "tu sugerencia"}]. No uses bloques de código markdown, solo el texto JSON crudo.`;
+          
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.7-flash',
+            contents: prompt
+          });
+          const rawText = response.text || '';
+          const cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(cleaned);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            insights = parsed;
+          }
+        } catch (geminiError: any) {
+          const errMsg = String(geminiError?.message || geminiError);
+          if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+            geminiQuotaCooldownUntil = Date.now() + 60000; // 1 minute cooldown on 429
+          }
+        }
       }
-      let insights = [];
-      try {
-        insights = JSON.parse(insightsText.replace(/```json/g, '').replace(/```/g, '').trim());
-      } catch (err) {
-        console.error("Error parsing Gemini JSON:", insightsText);
-      }
+
+      // Cache the result for 10 minutes to avoid redundant computations
+      insightsCache.set(cacheKey, { data: insights, expiresAt: now + 10 * 60 * 1000 });
+
       res.json(insights);
     } catch (e: any) {
-      console.error("Error in insights endpoint:", e);
-      res.status(500).json({ error: e.message });
+      res.json([
+        { title: "Optimización de Inventario", description: "Monitorea constantemente los productos con stock bajo para evitar quiebres en horas de alta demanda." },
+        { title: "Fidelización de Clientes", description: "Aprovecha el programa de puntos para incentivar compras recurrentes en clientes frecuentes." },
+        { title: "Gestión de Caja y Flujo", description: "Verifica los arqueos de caja periódicos para garantizar el cuadre exacto entre efectivo y pagos digitales." }
+      ]);
     }
   });
 
@@ -8026,31 +8064,32 @@ Responde de forma sumamente atenta, con alta proactividad, y de manera ultra bre
     });
   }
 
-  // Await startup pull from Google Cloud Firestore into local SQLite before serving HTTP traffic to prevent cold-start blank screens
-  try {
-    console.log("[Sync] Restoring SQLite database state from Cloud Firestore...");
-    await pullFirestoreToLocal();
-    console.log("[Sync] Startup database restoration completed successfully.");
-
-    // Dynamic self-healing backfill for inventory logs
-    console.log("[Sync-Heal] Starting dynamic self-healing database backfill...");
-    const { backfillMissingLogs } = await import("./database.ts");
-    backfillMissingLogs();
-
-    // Push the healed logs back to Firestore
-    console.log("[Sync-Heal] Replicating healed database state to Google Cloud Firestore...");
-    pushAllLocalToFirestore().then(() => {
-      console.log("[Sync-Heal] Healed database state successfully synced to Google Cloud Firestore.");
-    }).catch((syncErr: any) => {
-      console.warn("[Sync-Heal] Failed to upload healed database to cloud:", syncErr.message);
-    });
-  } catch (err: any) {
-    console.warn("[Sync] Startup pull bypassed or failed:", err.message);
-  }
-
+  // Start listening on port immediately so all health checks and API routes respond instantly (sub-10ms)
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server listening on port http://0.0.0.0:${PORT}`);
   });
+
+  // Asynchronously restore and synchronize SQLite database state from Cloud Firestore in the background
+  (async () => {
+    try {
+      console.log("[Sync] Restoring SQLite database state from Cloud Firestore in background...");
+      await pullFirestoreToLocal();
+      console.log("[Sync] Startup database restoration completed successfully.");
+
+      // Dynamic self-healing backfill for inventory logs
+      const { backfillMissingLogs } = await import("./database.ts");
+      backfillMissingLogs();
+
+      // Push any healed logs back to Firestore
+      pushAllLocalToFirestore().then(() => {
+        console.log("[Sync-Heal] Healed database state successfully synced to Google Cloud Firestore.");
+      }).catch((syncErr: any) => {
+        console.warn("[Sync-Heal] Failed to upload healed database to cloud:", syncErr.message);
+      });
+    } catch (err: any) {
+      console.warn("[Sync] Startup pull bypassed or failed:", err.message);
+    }
+  })().catch(() => {});
 }
 
 startServer();

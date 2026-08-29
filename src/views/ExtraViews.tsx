@@ -11,6 +11,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import DateRangePicker, { DateRange } from '../components/DateRangePicker';
+import ThreeDHourlySalesChart from '../components/ThreeDHourlySalesChart';
 import { useElasticScroll } from '../utils/touchScroll';
 import { 
     ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, 
@@ -2253,7 +2254,7 @@ export function DevolucionesView() {
 // VIEW: ANALISIS (CHARTS & DETAILED REPORTING)
 // ----------------------------------------------------
 export function AnalisisView() {
-    const { products, user } = useAppContext();
+    const { products, user, exchangeRate } = useAppContext();
     const [sales, setSales] = useState<any[]>([]);
     const [dateRange, setDateRange] = useState<DateRange>({
         startDate: (() => {
@@ -2295,9 +2296,10 @@ export function AnalisisView() {
 
     // Aggregate sales by hour
     const hourlySales = React.useMemo(() => {
-        const groups: { [key: string]: number } = {};
+        const groups: { [key: string]: { total: number; count: number } } = {};
         for (let i = 0; i < 24; i++) {
-            groups[i.toString().padStart(2, '0')] = 0;
+            const key = i.toString().padStart(2, '0');
+            groups[key] = { total: 0, count: 0 };
         }
         sales.forEach(s => {
             if (s.created_at) {
@@ -2307,14 +2309,17 @@ export function AnalisisView() {
                 } else if (s.created_at.includes(' ')) {
                     hour = s.created_at.split(' ')[1].split(':')[0];
                 }
-                if (hour) {
-                    groups[hour] = (groups[hour] || 0) + s.total;
+                if (hour && groups[hour]) {
+                    groups[hour].total += s.total;
+                    groups[hour].count += 1;
                 }
             }
         });
         return Object.keys(groups).sort().map(hour => ({
             hour,
-            total: parseFloat(groups[hour].toFixed(2))
+            label: `${hour}:00`,
+            total: parseFloat(groups[hour].total.toFixed(2)),
+            count: groups[hour].count
         }));
     }, [sales]);
 
@@ -2526,23 +2531,15 @@ export function AnalisisView() {
             </div>
 
             
-            {/* 3. Hourly Sales Distribution (Peak Hours) */}
-            <div className="bg-white dark:bg-[#0c111e] rounded-3xl border border-slate-150 dark:border-slate-850 p-5 flex flex-col gap-4 shadow-sm mb-5">
-                <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 pb-2 border-b border-slate-50 dark:border-slate-850/60 block">Patrón de Ventas por Hora (Horas Pico)</span>
-                <div className="h-52 w-full mt-2">
-                    {hourlySales.length === 0 ? (
-                        <div className="text-center text-[10px] text-slate-400 uppercase font-bold tracking-wider flex items-center justify-center h-full">Sin datos registrados</div>
-                    ) : (
-                        <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={hourlySales} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 700 }} tickFormatter={(val) => `${val}:00`} axisLine={false} tickLine={false} />
-                                <YAxis tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
-                                <RechartsTooltip contentStyle={{ borderRadius: '16px', background: '#0f172a', color: '#fff', border: 'none', fontSize: '11px', fontWeight: '700', fontFamily: 'monospace' }} formatter={(val: any) => [`Bs. ${Number(val).toFixed(2)}`, 'Ventas']} labelFormatter={(val) => `Hora: ${val}:00`} cursor={{fill: 'transparent'}} />
-                                <Bar dataKey="total" fill="#a855f7" radius={[4, 4, 0, 0]} />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </div>
+            {/* 3. Hourly Sales Distribution (Peak Hours - 3D Interactive) */}
+            <div className="mb-2">
+                <ThreeDHourlySalesChart 
+                    data={hourlySales}
+                    exchangeRate={exchangeRate}
+                    isAdmin={user?.role === 'admin'}
+                    title="Patrón de Ventas por Hora y Horarios Pico"
+                    subtitle="Visualización volumétrica 3D interactiva con rotación espacial y zoom táctil"
+                />
             </div>
 
             {/* AI insights and secondary information bento */}

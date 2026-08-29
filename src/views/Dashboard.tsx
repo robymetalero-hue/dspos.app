@@ -11,6 +11,7 @@ import {
     PieChart, Pie, Cell, Legend, BarChart, Bar, LineChart, Line
 } from 'recharts';
 import DateRangePicker, { DateRange } from '../components/DateRangePicker';
+import ThreeDHourlySalesChart from '../components/ThreeDHourlySalesChart';
 import { backupDatabaseToDrive } from "../utils/driveBackup";
 
 const CardSkeleton = () => (
@@ -25,7 +26,7 @@ const CardSkeleton = () => (
 );
 
 export default function Dashboard() {
-    const { user, fetchProducts } = useAppContext();
+    const { user, fetchProducts, exchangeRate } = useAppContext();
     const [chartType, setChartType] = useState<'area' | 'bar' | 'line'>('area');
     const [sellerId, setSellerId] = useState<string>('all');
     const [paymentMethodFilter, setPaymentMethodFilter] = useState<string>('all');
@@ -678,73 +679,15 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
                 {/* 1. Peak Hours Heatmap Chart (2 cols) */}
-                <div className="lg:col-span-2 bg-white dark:bg-[#0c111e] p-5 md:p-6 rounded-3xl border border-slate-200/80 dark:border-slate-850 shadow-xs flex flex-col justify-between">
-                    <div>
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-sm font-black text-slate-800 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                                <Clock size={16} className="text-amber-500" />
-                                Análisis de Horarios Pico de Venta (24h)
-                            </h2>
-                            {peakHour && (
-                                <span className="text-[10px] font-black bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-xl">
-                                    Pico Máximo: {peakHour.hour}:00
-                                </span>
-                            )}
-                        </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Distribución de tráfico e ingresos hora a hora para optimización de personal y stock.</p>
-                    </div>
-
-                    <div className="h-[220px] w-full my-4">
-                        {loading ? (
-                            <div className="h-full w-full bg-slate-100 dark:bg-slate-900/50 rounded-2xl animate-pulse"></div>
-                        ) : stats.hourlySales && stats.hourlySales.length > 0 ? (
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={stats.hourlySales} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" opacity={0.15} />
-                                    <XAxis dataKey="label" stroke="#94a3b8" fontSize={9} tickLine={false} interval={1} />
-                                    <YAxis stroke="#94a3b8" fontSize={9} tickLine={false} tickFormatter={(v) => `Bs.${v}`} />
-                                    <Tooltip 
-                                        contentStyle={{ 
-                                            backgroundColor: '#0f172a', 
-                                            borderColor: '#1e293b', 
-                                            borderRadius: '16px', 
-                                            color: '#fff',
-                                            fontSize: '11px',
-                                            fontWeight: 'bold'
-                                        }}
-                                        formatter={(value: any, name: any, item: any) => [
-                                            `Bs. ${Number(value).toFixed(2)} (${item.payload.count} ventas)`,
-                                            'Venta Hora'
-                                        ]}
-                                    />
-                                    <Bar dataKey="total" name="Monto en Hora" radius={[6, 6, 0, 0]}>
-                                        {stats.hourlySales.map((entry, index) => {
-                                            const isPeak = peakHour && entry.hour === peakHour.hour && entry.total > 0;
-                                            return <Cell key={`cell-${index}`} fill={isPeak ? '#f59e0b' : entry.total > 0 ? '#3b82f6' : '#334155'} opacity={entry.total > 0 ? 0.9 : 0.2} />;
-                                        })}
-                                    </Bar>
-                                </BarChart>
-                            </ResponsiveContainer>
-                        ) : (
-                            <div className="h-full w-full flex items-center justify-center text-slate-400 text-xs font-semibold">
-                                Sin ventas registradas por hora
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="flex items-center justify-between text-[11px] text-slate-400 font-semibold pt-2 border-t border-slate-100 dark:border-slate-850">
-                        <div className="flex items-center gap-3">
-                            <span className="flex items-center gap-1">
-                                <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                                Peak Hour (Mayor Tráfico)
-                            </span>
-                            <span className="flex items-center gap-1">
-                                <span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>
-                                Ventas Activas
-                            </span>
-                        </div>
-                        <span className="text-[10px]">Actualizado continuamente</span>
-                    </div>
+                <div className="lg:col-span-2">
+                    <ThreeDHourlySalesChart 
+                        data={stats.hourlySales}
+                        exchangeRate={exchangeRate}
+                        isLoading={loading}
+                        isAdmin={user?.role === 'admin'}
+                        title="Rendimiento de Ventas por Hora (24h)"
+                        subtitle="Gráfico volumétrico 3D interactivo con rotación espacial 360°, métricas y zoom táctil"
+                    />
                 </div>
 
                 {/* 2. Top Products Ranking (1 col) */}

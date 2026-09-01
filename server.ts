@@ -2761,7 +2761,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       const unifiedLogs = invLogs.map(log => {
         // Find a matching system audit log to extract details if available
         const match = sysLogs.find(sys => 
-          sys.related_ticket === log.reference && 
+          (sys.related_ticket === log.reference || (sys.related_product_id === log.product_id && Math.abs(new Date(sys.created_at).getTime() - new Date(log.created_at).getTime()) < 3000)) && 
           Math.abs(sys.quantity_changed || 0) === Math.abs(log.quantity || 0)
         );
 
@@ -2781,8 +2781,8 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           price: log.price,
           created_at: log.created_at,
           reference: log.reference,
-          username: match?.user_name || log.username || 'admin',
-          notes: match?.reason || log.notes || 'Movimiento de inventario',
+          username: log.username || match?.user_name || 'admin',
+          notes: log.notes || match?.reason || 'Movimiento de inventario',
           quantity_before: match ? match.quantity_before : null,
           quantity_after: match ? match.quantity_after : null,
           quantity_changed: match && match.quantity_changed !== null && match.quantity_changed !== undefined ? match.quantity_changed : (isInc ? log.quantity : -log.quantity),
@@ -2792,13 +2792,18 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         };
       });
 
-      // Also grab any system_audit_logs that might not have a corresponding inventory_audit_log
+      // Strictly only include real missing system inventory adjustments if they have actual quantity changes and are not yet mapped
+      const inventoryEventTypes = ['ingreso_compra', 'ingreso_devolucion', 'ajuste_incremento', 'ajuste_decremento', 'salida_venta', 'INVENTORY_MANUAL_ADJUSTMENT'];
       const missingSysLogs = sysLogs.filter(sys => {
+        if (!inventoryEventTypes.includes(sys.event_type)) return false;
+        const qtyChanged = Math.abs(sys.quantity_changed || 0);
+        if (qtyChanged <= 0) return false;
+
         const alreadyMapped = unifiedLogs.some(ul => 
-          ul.reference === sys.related_ticket && 
-          Math.abs(ul.quantity || 0) === Math.abs(sys.quantity_changed || 0)
+          (ul.reference === sys.related_ticket || Math.abs(new Date(ul.created_at).getTime() - new Date(sys.created_at).getTime()) < 3000) && 
+          Math.abs(ul.quantity || 0) === qtyChanged
         );
-        return !alreadyMapped && sys.event_type !== 'SYSTEM_EVENT';
+        return !alreadyMapped;
       });
 
       for (const sys of missingSysLogs) {
@@ -2809,18 +2814,21 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           }
         } catch (e) {}
 
+        const isInc = sys.event_type === 'ajuste_incremento' || sys.event_type === 'ingreso_compra' || sys.event_type === 'ingreso_devolucion';
+        const qty = Math.abs(sys.quantity_changed || 0);
+
         unifiedLogs.push({
-          id: `sys-${sys.created_at}-${Math.random()}`,
+          id: sys.id || `sys-${sys.created_at}`,
           type: sys.event_type,
-          quantity: Math.abs(sys.quantity_changed || 0),
+          quantity: qty,
           price: sys.price_after || sys.price_before || 0,
           created_at: sys.created_at,
-          reference: sys.related_ticket || 'Ajuste de Sistema',
-          username: sys.user_name || 'sistema',
-          notes: sys.reason || 'Log registrado por sistema',
+          reference: sys.related_ticket || 'Ajuste de Inventario',
+          username: sys.user_name || 'admin',
+          notes: sys.reason || 'Movimiento de inventario',
           quantity_before: sys.quantity_before,
           quantity_after: sys.quantity_after,
-          quantity_changed: sys.quantity_changed,
+          quantity_changed: sys.quantity_changed || (isInc ? qty : -qty),
           price_before: sys.price_before,
           price_after: sys.price_after,
           changed_fields: parsedFields

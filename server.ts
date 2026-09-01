@@ -8075,17 +8075,6 @@ Responde de forma sumamente atenta, con alta proactividad, y de manera ultra bre
       console.log("[Sync] Restoring SQLite database state from Cloud Firestore in background...");
       await pullFirestoreToLocal();
       console.log("[Sync] Startup database restoration completed successfully.");
-
-      // Dynamic self-healing backfill for inventory logs
-      const { backfillMissingLogs } = await import("./database.ts");
-      backfillMissingLogs();
-
-      // Push any healed logs back to Firestore
-      pushAllLocalToFirestore().then(() => {
-        console.log("[Sync-Heal] Healed database state successfully synced to Google Cloud Firestore.");
-      }).catch((syncErr: any) => {
-        console.warn("[Sync-Heal] Failed to upload healed database to cloud:", syncErr.message);
-      });
     } catch (err: any) {
       console.warn("[Sync] Startup pull bypassed or failed:", err.message);
     }

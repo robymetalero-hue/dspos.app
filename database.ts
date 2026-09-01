@@ -1034,47 +1034,8 @@ export function backfillMissingLogs() {
           }
         }
 
-        // 3. Balance verification and Initial Stock adjustment
-        const logs = db.prepare('SELECT type, quantity FROM inventory_audit_logs WHERE product_id = ?').all(p.id) as any[];
-        let loggedStockBalance = 0;
-        for (const log of logs) {
-          if (log.type === 'ingreso_compra' || log.type === 'ingreso_devolucion' || log.type === 'ajuste_incremento') {
-            loggedStockBalance += log.quantity;
-          } else if (log.type === 'salida_venta' || log.type === 'ajuste_decremento') {
-            loggedStockBalance -= log.quantity;
-          }
-        }
-
-        const actualStock = p.stock;
-        const diff = actualStock - loggedStockBalance;
-
-        if (diff !== 0) {
-          const logType = diff > 0 ? 'ajuste_incremento' : 'ajuste_decremento';
-          const absQty = Math.abs(diff);
-          const isInitial = logs.length === 0 || !logs.some((l: any) => l.reference === 'Stock Inicial');
-          const ref = isInitial ? 'Stock Inicial' : 'Ajuste de Reconciliación';
-          const notes = isInitial 
-            ? `Registro inicial de balance para conciliación histórica (Ajustado de ${loggedStockBalance} a ${actualStock} pz)` 
-            : `Ajuste automático de balance para conciliación histórica (De ${loggedStockBalance} a ${actualStock} pz)`;
-
-          console.log(`[Database-Backfill] Balance discrepancy for "${p.name}" (ID ${p.id}): actual stock is ${actualStock}, logged balance is ${loggedStockBalance}. Creating ${ref} of ${diff} units...`);
-          
-          db.prepare(`
-            INSERT INTO inventory_audit_logs 
-            (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, 'admin', ?, ?, ?)
-          `).run(
-            p.id,
-            p.name,
-            p.sku,
-            logType,
-            absQty,
-            p.price_cost || 0,
-            ref,
-            notes,
-            p.created_at || getBoliviaISOString()
-          );
-        }
+        // 3. Balance verification (Read-only check - NEVER insert artificial adjustment logs)
+        // Automatic synthetic adjustments have been completely disabled to prevent ghost modifications.
       }
     })();
 

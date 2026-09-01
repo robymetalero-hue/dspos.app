@@ -594,6 +594,51 @@ try {
   `);
 } catch (e) {}
 
+// Create firestore_transaction_ledger table for strict transaction hash validation and audit
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS firestore_transaction_ledger (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tx_hash TEXT UNIQUE NOT NULL,
+      table_name TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      user_id INTEGER,
+      user_name TEXT,
+      user_role TEXT,
+      payload_checksum TEXT,
+      status TEXT NOT NULL,
+      created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%S-04:00', 'now', '-4 hours'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_firestore_tx_hash ON firestore_transaction_ledger (tx_hash);
+    CREATE INDEX IF NOT EXISTS idx_firestore_tx_table_record ON firestore_transaction_ledger (table_name, record_id);
+    CREATE INDEX IF NOT EXISTS idx_firestore_tx_user ON firestore_transaction_ledger (user_name);
+    CREATE INDEX IF NOT EXISTS idx_firestore_tx_created_at ON firestore_transaction_ledger (created_at);
+  `);
+} catch (e: any) {
+  console.error("Error creating firestore_transaction_ledger:", e.message);
+}
+
+try {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_update
+    BEFORE UPDATE ON firestore_transaction_ledger
+    BEGIN
+      SELECT RAISE(FAIL, 'firestore_transaction_ledger entries are immutable and cannot be modified');
+    END;
+  `);
+} catch (e) {}
+try {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS prevent_firestore_ledger_delete
+    BEFORE DELETE ON firestore_transaction_ledger
+    BEGIN
+      SELECT RAISE(FAIL, 'firestore_transaction_ledger entries are immutable and cannot be deleted');
+    END;
+  `);
+} catch (e) {}
+
 // Seed exchange rate default
 try {
   const hasRate = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate');

@@ -41,6 +41,11 @@ import {
   orderBy
 } from 'firebase/firestore';
 import { db } from './database.ts';
+import { 
+  validateFirestoreWriteOperation, 
+  validateRemoteFirestoreDocument,
+  UserContext 
+} from './firestoreIntegrityMiddleware.ts';
 import fs from 'fs';
 import path from 'path';
 
@@ -164,7 +169,8 @@ export const SYNC_TABLES = [
   'inventory_audit_logs',
   'system_audit_logs',
   'inventory_counts',
-  'inventory_count_items'
+  'inventory_count_items',
+  'firestore_transaction_ledger'
 ];
 
 let isPullingInProgress = false;
@@ -188,7 +194,8 @@ export const APPEND_ONLY_TABLES = [
   'inventory_audit_logs',
   'system_audit_logs',
   'inventory_counts',
-  'inventory_count_items'
+  'inventory_count_items',
+  'firestore_transaction_ledger'
 ];
 
 // In-memory cache of last successfully synchronized maximum IDs per table to prevent redundant Firestore operations
@@ -221,7 +228,7 @@ export function isRecordDeleted(tableName: string, recordId: string | number): b
 /**
  * Deletes document(s) directly and immediately from Firestore.
  */
-export async function deleteFromFirestore(tableName: string, idOrIds: any | any[]) {
+export async function deleteFromFirestore(tableName: string, idOrIds: any | any[], userContext?: UserContext) {
   if (!firestore || checkQuota()) {
     return;
   }
@@ -234,6 +241,14 @@ export async function deleteFromFirestore(tableName: string, idOrIds: any | any[
     let batch = writeBatch(firestore);
     let count = 0;
     for (const id of ids) {
+      // Validate deletion operation and log to tamper-evident transaction ledger
+      try {
+        validateFirestoreWriteOperation(tableName, id, 'DELETE', undefined, userContext);
+      } catch (valErr: any) {
+        console.warn(`[Firestore Integrity Warning] Blocked delete operation on ${tableName} #${id}:`, valErr.message);
+        continue;
+      }
+
       const docRef = doc(firestore, tableName, String(id));
       batch.delete(docRef);
       count++;
@@ -256,7 +271,7 @@ export async function deleteFromFirestore(tableName: string, idOrIds: any | any[
  * Pushes a local SQLite table's content to Firestore.
  * Supports targeted synchronization for specific rows to optimize speed and network payload.
  */
-export async function pushLocalToFirestore(tableName: string, idOrIds?: any | any[]) {
+export async function pushLocalToFirestore(tableName: string, idOrIds?: any | any[], userContext?: UserContext) {
   if (!firestore || checkQuota()) {
     return;
   }
@@ -283,7 +298,7 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
         const validIds = idList.filter(id => !deletedIdsSet.has(String(id)));
         if (validIds.length === 0) {
           // If all targeted IDs are deleted, delete them from Firestore
-          await deleteFromFirestore(tableName, idList);
+          await deleteFromFirestore(tableName, idList, userContext);
           return;
         }
         const placeholders = validIds.map(() => '?').join(', ');
@@ -346,7 +361,6 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
           for (const row of rows) {
             const docId = String(row.id);
             if (deletedIdsSet.has(docId)) continue;
-            const docRef = doc(firestore, tableName, docId);
 
             const cleanData: any = {};
             for (const [key, val] of Object.entries(row)) {
@@ -355,7 +369,18 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
               }
             }
 
-            batch.set(docRef, cleanData);
+            // Strictly validate payload integrity and compute cryptographic transaction hash
+            let enrichedData = cleanData;
+            try {
+              const validation = validateFirestoreWriteOperation(tableName, docId, 'CREATE', cleanData, userContext);
+              enrichedData = validation.enrichedPayload;
+            } catch (valErr: any) {
+              console.warn(`[Firestore Anti-Ghost Violation] Blocked record on ${tableName} #${docId}:`, valErr.message);
+              continue;
+            }
+
+            const docRef = doc(firestore, tableName, docId);
+            batch.set(docRef, enrichedData);
             opCount++;
 
             if (opCount >= 400) {
@@ -394,7 +419,6 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
 
       for (const row of rows) {
         const docId = isSettings ? row.key : String(row.id);
-        const docRef = doc(firestore, tableName, docId);
 
         const cleanData: any = {};
         for (const [key, val] of Object.entries(row)) {
@@ -403,7 +427,18 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
           }
         }
 
-        batch.set(docRef, cleanData);
+        // Validate payload & compute transaction hash
+        let enrichedData = cleanData;
+        try {
+          const validation = validateFirestoreWriteOperation(tableName, docId, 'CREATE', cleanData, userContext);
+          enrichedData = validation.enrichedPayload;
+        } catch (valErr: any) {
+          console.warn(`[Firestore Anti-Ghost Violation] Blocked targeted row on ${tableName} #${docId}:`, valErr.message);
+          continue;
+        }
+
+        const docRef = doc(firestore, tableName, docId);
+        batch.set(docRef, enrichedData);
         opCount++;
 
         if (opCount >= 400) {
@@ -437,11 +472,14 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
     let opCount = 0;
 
     // Delete keys from Firestore that no longer exist in local SQLite (soft synchronization)
-    // Safeguard: Do not perform remote deletions if the local table is completely empty, 
-    // to prevent accidental cloud data wipes due to local SQLite corruption or uninitialized startup states.
     if (rows.length > 0) {
       for (const docSnap of snapshot.docs) {
         if (!localIds.has(docSnap.id)) {
+          try {
+            validateFirestoreWriteOperation(tableName, docSnap.id, 'DELETE', undefined, userContext);
+          } catch (delErr: any) {
+            continue;
+          }
           batch.delete(docSnap.ref);
           opCount++;
           if (opCount >= 400) {
@@ -453,12 +491,10 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
       }
     }
 
-    // Upsert all local records to Firestore
+    // Upsert all local records to Firestore with strict verification
     for (const row of rows) {
       const docId = tableName === 'settings' ? row.key : String(row.id);
-      const docRef = doc(firestore, tableName, docId);
       
-      // Create a clean object removing any undefined properties
       const cleanData: any = {};
       for (const [key, val] of Object.entries(row)) {
         if (val !== undefined) {
@@ -466,7 +502,17 @@ export async function pushLocalToFirestore(tableName: string, idOrIds?: any | an
         }
       }
 
-      batch.set(docRef, cleanData);
+      let enrichedData = cleanData;
+      try {
+        const validation = validateFirestoreWriteOperation(tableName, docId, 'CREATE', cleanData, userContext);
+        enrichedData = validation.enrichedPayload;
+      } catch (valErr: any) {
+        console.warn(`[Firestore Anti-Ghost Violation] Blocked upsert on ${tableName} #${docId}:`, valErr.message);
+        continue;
+      }
+
+      const docRef = doc(firestore, tableName, docId);
+      batch.set(docRef, enrichedData);
       opCount++;
 
       // Commit batches when approaching Firestore's 500 operation limit
@@ -616,6 +662,11 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
 
             // CRITICAL: Never re-insert records that have been deleted!
             if (deletedIdsSet.has(docId)) {
+              continue;
+            }
+
+            // ANTI-GHOST RECORD VALIDATION: Verify incoming Firestore document structure
+            if (!validateRemoteFirestoreDocument(table, data, docId)) {
               continue;
             }
 

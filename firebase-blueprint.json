@@ -192,6 +192,25 @@
         "created_at": { "type": "string" }
       },
       "required": ["seller_id", "seller_username", "admin_id", "admin_username", "calculated_amount", "delivered_amount"]
+    },
+    "FirestoreTransactionLedger": {
+      "title": "FirestoreTransactionLedger",
+      "description": "Cryptographic write transaction audit log verifying user integrity.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "tx_hash": { "type": "string" },
+        "table_name": { "type": "string" },
+        "record_id": { "type": "string" },
+        "operation": { "type": "string" },
+        "user_id": { "type": "integer" },
+        "user_name": { "type": "string" },
+        "user_role": { "type": "string" },
+        "payload_checksum": { "type": "string" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["tx_hash", "table_name", "record_id", "operation", "status"]
     }
   },
   "firestore": {
@@ -254,6 +273,10 @@
     "/cash_settlements/{id}": {
       "schema": "CashSettlement",
       "description": "Historic cash settlements and administrative resets"
+    },
+    "/firestore_transaction_ledger/{id}": {
+      "schema": "FirestoreTransactionLedger",
+      "description": "Cryptographic write transaction audit log"
     }
   }
 }

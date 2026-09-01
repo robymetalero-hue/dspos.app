@@ -12,6 +12,7 @@ import rateLimit from "express-rate-limit";
 import { db, getBoliviaISOString, insertSystemAuditLog } from "./database.ts";
 import { normalizeProductName } from "./src/utils/productUtils.ts";
 import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData, recordDeletion, deleteFromFirestore } from "./firebaseSync.ts";
+import { requestContextStorage, getRecentFirestoreLedger, getFirestoreLedgerStats } from "./firestoreIntegrityMiddleware.ts";
 import { collection, getDocs } from "firebase/firestore";
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration } from "@google/genai";
 import { WebSocketServer } from "ws";
@@ -234,7 +235,9 @@ async function startServer() {
       ipAddress: Array.isArray(ipAddress) ? ipAddress[0] : String(ipAddress || ''),
     };
 
-    next();
+    requestContextStorage.run((req as any).auditUser, () => {
+      next();
+    });
   });
 
   // TRACEABILITY: Global API Modification Logger
@@ -2739,6 +2742,35 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
+  // Firestore Transaction Ledger & Cryptographic Integrity Verification Endpoint
+  app.get("/api/firestore/transaction-ledger", (req, res) => {
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit || "50")), 200);
+      const ledger = getRecentFirestoreLedger(limit);
+      res.json({
+        success: true,
+        count: ledger.length,
+        ledger
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Firestore Write Integrity Summary Statistics Endpoint
+  app.get("/api/firestore/integrity-stats", (req, res) => {
+    try {
+      const stats = getFirestoreLedgerStats();
+      res.json({
+        success: true,
+        stats,
+        integrity_status: "ENFORCED_CRYPTO_HMAC_SHA256"
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Product-specific complete audit log endpoint
   app.get("/api/products/:id/audit-history", (req, res) => {
     const { id } = req.params;
@@ -3422,10 +3454,20 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         return res.status(400).json({ error: "Datos de respaldo no proporcionados o vacíos en el cuerpo de la petición." });
       }
 
+      // 1. Create a safety snapshot of the local database before restoring
+      try {
+        if (fs.existsSync('gtr_pos.db')) {
+          fs.copyFileSync('gtr_pos.db', 'gtr_pos.db.bak');
+          console.log("[Backup Import] Created pre-restore safety copy gtr_pos.db.bak");
+        }
+      } catch (bakErr: any) {
+        console.warn("[Backup Import Warning] Could not create pre-restore safety copy:", bakErr.message);
+      }
+
       let totalRestoredRows = 0;
       const restoredRecordCounts: Record<string, number> = {};
 
-      // Execute restoration within a single atomic transaction
+      // 2. Execute restoration within a single atomic transaction
       const importTx = db.transaction(() => {
         // Temporarily disable foreign keys to allow mass restoration regardless of table order
         db.pragma('foreign_keys = OFF');
@@ -3465,11 +3507,39 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           }
         }
 
+        // 3. Align sqlite_sequence with the highest restored ID in each table
+        try {
+          for (const tableName of Object.keys(rawData)) {
+            try {
+              const tableCols = db.prepare(`PRAGMA table_info("${tableName}")`).all() as any[];
+              const hasIdCol = tableCols.some(c => c.name === 'id');
+              if (hasIdCol) {
+                const maxRow = db.prepare(`SELECT MAX(id) as maxId FROM "${tableName}"`).get() as any;
+                if (maxRow && maxRow.maxId !== null && maxRow.maxId !== undefined) {
+                  db.prepare(`INSERT OR REPLACE INTO sqlite_sequence (name, seq) VALUES (?, ?)`).run(tableName, maxRow.maxId);
+                }
+              }
+            } catch (colErr) {
+              // Ignore individual table sequence alignment failures
+            }
+          }
+        } catch (seqErr: any) {
+          console.warn("[Restore Warning] Sequence alignment note:", seqErr.message);
+        }
+
         // Re-enable foreign key constraints
         db.pragma('foreign_keys = ON');
       });
 
       importTx();
+
+      // 4. Optimize SQLite query plans and rebuild indexes post-restoration
+      try {
+        db.exec('REINDEX;');
+        db.pragma('optimize;');
+      } catch (optErr) {
+        // Non-critical
+      }
 
       const auditUser = (req as any).auditUser || {};
       const userName = auditUser.userName || (req.headers['x-user-name'] ? String(req.headers['x-user-name']) : 'admin');
@@ -3488,7 +3558,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         console.warn("[Backup Restore Audit Warning]:", auditErr);
       }
 
-      // Enforce background replication to Cloud Firestore
+      // 5. Enforce background replication to Cloud Firestore
       pushAllLocalToFirestore().then(() => {
         console.log("[Sync Success] Post-import full sync with Google Cloud Firestore finished successfully.");
       }).catch((err: any) => {

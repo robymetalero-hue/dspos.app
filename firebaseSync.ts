@@ -728,11 +728,13 @@ export function syncAfterWrite(tableOrMap: string | string[] | Record<string, an
 export async function clearAllFirestoreAndLocalData(): Promise<void> {
   console.log("[Sync Reset] Starting complete database purge (Local SQLite & Cloud Firestore)...");
 
-  // 1. Clear Google Cloud Firestore collections
+  // 1. Clear Google Cloud Firestore collections in parallel
   if (firestore) {
     try {
       await ensureServerAuth();
-      for (const tableName of SYNC_TABLES) {
+      const collectionsToClear = [...SYNC_TABLES, 'processed_operations', 'deleted_records'];
+      
+      await Promise.all(collectionsToClear.map(async (tableName) => {
         try {
           const colRef = collection(firestore, tableName);
           const snapshot = await getDocs(colRef);
@@ -756,7 +758,7 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
         } catch (colErr: any) {
           console.warn(`[Sync Reset Warning] Error clearing Firestore collection "${tableName}":`, colErr.message);
         }
-      }
+      }));
 
       // Mark sync_metadata status as initialized so empty collections are treated as intentionally zeroed
       const metaRef = doc(firestore, 'sync_metadata', 'status');
@@ -788,7 +790,9 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
     'system_audit_logs',
     'inventory_counts',
     'inventory_count_items',
-    'exchange_rate_audit'
+    'exchange_rate_audit',
+    'processed_operations',
+    'deleted_records'
   ];
 
   try {

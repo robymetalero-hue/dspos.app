@@ -335,6 +335,11 @@ export default function ConfiguracionesView() {
     const [isRestoreModalOpen, setIsRestoreModalOpen] = useState<boolean>(false);
     const [isValidatingFile, setIsValidatingFile] = useState<boolean>(false);
 
+    // Reset database modal states
+    const [isResetModalOpen, setIsResetModalOpen] = useState<boolean>(false);
+    const [resetConfirmInput, setResetConfirmInput] = useState<string>("");
+    const [isResettingDb, setIsResettingDb] = useState<boolean>(false);
+
     const isAdmin = user?.role === 'admin';
 
     const handleDownloadBackup = async () => {
@@ -563,14 +568,18 @@ export default function ConfiguracionesView() {
         }
     };
 
-    const handleResetDatabaseToZero = async () => {
-        const confirmCode = prompt("⚠️ ATENCIÓN: Esta acción BORRARÁ COMPLETAMENTE todas las ventas, productos, clientes, historial de turnos y auditorías tanto en SQLite Local como en Google Cloud Firestore para iniciar desde cero.\n\nEscribe 'BORRAR' para confirmar:");
-        if (confirmCode !== 'BORRAR') {
-            if (confirmCode !== null) showNotification?.("Reinicio cancelado.", "error");
+    const handleOpenResetModal = () => {
+        setResetConfirmInput("");
+        setIsResetModalOpen(true);
+    };
+
+    const handleExecuteResetDatabase = async () => {
+        if (resetConfirmInput.trim().toUpperCase() !== 'BORRAR') {
+            showNotification?.("Debes escribir BORRAR para confirmar el reinicio.", "error");
             return;
         }
 
-        setIsLoading(true);
+        setIsResettingDb(true);
         try {
             const res = await fetch('/api/admin/reset-database', { method: 'POST' });
             const data = await res.json();
@@ -579,6 +588,7 @@ export default function ConfiguracionesView() {
                     await clearAllOfflineStorage();
                 } catch (e) {}
 
+                setIsResetModalOpen(false);
                 showNotification?.("✓ " + (data.message || "Base de datos reiniciada a cero correctamente."), "success");
                 setTimeout(() => {
                     window.location.reload();
@@ -589,7 +599,7 @@ export default function ConfiguracionesView() {
         } catch (err: any) {
             showNotification?.("Error al reiniciar base de datos: " + err.message, "error");
         } finally {
-            setIsLoading(false);
+            setIsResettingDb(false);
         }
     };
 
@@ -1758,8 +1768,8 @@ export default function ConfiguracionesView() {
                             {/* Reiniciar Base de Datos a Cero Button */}
                             <button
                                 type="button"
-                                disabled={isLoading}
-                                onClick={handleResetDatabaseToZero}
+                                disabled={isLoading || isResettingDb}
+                                onClick={handleOpenResetModal}
                                 className="sm:col-span-2 p-4 bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700 text-white rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-md transition group animate-in fade-in"
                             >
                                 <Trash2 size={22} className="text-white transition group-hover:scale-110" />
@@ -2157,6 +2167,97 @@ export default function ConfiguracionesView() {
                                     <>
                                         <Upload size={14} />
                                         <span>Confirmar e Importar Ahora</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+            )}
+
+            {/* MODAL DE CONFIRMACIÓN PARA REINICIAR BASE DE DATOS A CERO */}
+            {isResetModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-[#0c111e] border border-rose-200 dark:border-rose-900/60 rounded-3xl max-w-md w-full p-6 shadow-2xl flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
+                        
+                        {/* Header */}
+                        <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-850 pb-4">
+                            <div className="flex items-center gap-3">
+                                <div className="p-3 bg-red-500/10 text-red-600 dark:text-red-400 rounded-2xl shrink-0">
+                                    <Trash2 size={24} />
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-black text-slate-800 dark:text-slate-100 tracking-tight">
+                                        Reiniciar Base de Datos a Cero
+                                    </h3>
+                                    <p className="text-[11px] font-semibold text-rose-500">
+                                        Acción destructiva e irreversible
+                                    </p>
+                                </div>
+                            </div>
+                            <button 
+                                type="button"
+                                disabled={isResettingDb}
+                                onClick={() => setIsResetModalOpen(false)}
+                                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition disabled:opacity-50"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Warning Box */}
+                        <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-600 dark:text-red-400 text-xs space-y-2">
+                            <div className="flex items-center gap-2 font-black uppercase tracking-wide">
+                                <ShieldAlert size={18} className="shrink-0" />
+                                <span>¿Estás completamente seguro?</span>
+                            </div>
+                            <p className="text-[11px] font-medium leading-relaxed opacity-95">
+                                Esta acción <strong>eliminará por completo</strong> todas las ventas, productos, clientes, cuentas por cobrar, arqueos de caja e historiales tanto en <strong>SQLite Local</strong> como en <strong>Google Cloud Firestore</strong> para dejar el sistema listo para una nueva carga o restauración.
+                            </p>
+                        </div>
+
+                        {/* Confirmation Input */}
+                        <div className="space-y-1.5">
+                            <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                                Para confirmar el borrado total, escribe <span className="font-black text-red-600 dark:text-red-400">BORRAR</span>:
+                            </label>
+                            <input
+                                type="text"
+                                value={resetConfirmInput}
+                                onChange={(e) => setResetConfirmInput(e.target.value)}
+                                placeholder="Escribe BORRAR"
+                                autoFocus
+                                disabled={isResettingDb}
+                                className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-mono text-sm tracking-wider uppercase focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500 transition"
+                            />
+                        </div>
+
+                        {/* Modal Action Buttons */}
+                        <div className="flex items-center justify-end gap-3 pt-2">
+                            <button
+                                type="button"
+                                disabled={isResettingDb}
+                                onClick={() => setIsResetModalOpen(false)}
+                                className="px-5 py-3 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 text-xs font-extrabold hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer disabled:opacity-50"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="button"
+                                disabled={resetConfirmInput.trim().toUpperCase() !== 'BORRAR' || isResettingDb}
+                                onClick={handleExecuteResetDatabase}
+                                className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-red-500/20 flex items-center gap-2 cursor-pointer transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                {isResettingDb ? (
+                                    <>
+                                        <RefreshCw size={14} className="animate-spin" />
+                                        <span>Reiniciando Base de Datos...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Trash2 size={14} />
+                                        <span>Sí, Eliminar y Reiniciar</span>
                                     </>
                                 )}
                             </button>

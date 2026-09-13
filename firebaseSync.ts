@@ -44,7 +44,7 @@ import { db } from './database.ts';
 import { 
   validateFirestoreWriteOperation, 
   validateRemoteFirestoreDocument,
-  UserContext 
+  type UserContext 
 } from './firestoreIntegrityMiddleware.ts';
 import fs from 'fs';
 import path from 'path';
@@ -147,13 +147,13 @@ export async function ensureServerAuth() {
 }
 
 export const SYNC_TABLES = [
+  'settings',
   'users',
   'products',
   'clients',
   'sales',
   'sale_items',
   'shifts',
-  'settings',
   'exchange_rate_audit',
   'caja_cierres',
   'departments',
@@ -609,7 +609,12 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
     const collectionResults = await Promise.all(
       SYNC_TABLES.map(async (table) => {
         try {
-          const snapshot = await getDocs(collection(firestore, table));
+          let snapshot;
+          if (table === 'firestore_transaction_ledger') {
+            snapshot = await getDocs(query(collection(firestore, table), limit(100)));
+          } else {
+            snapshot = await getDocs(collection(firestore, table));
+          }
           return { table, snapshot, error: null };
         } catch (tableErr: any) {
           handleSyncError(tableErr, `[Sync Warning] Table "${table}":`);
@@ -657,6 +662,9 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
 
           for (const docSnap of remoteDocs) {
             const data = docSnap.data();
+            if (table === 'settings' && !data.key) {
+              data.key = docSnap.id;
+            }
             const docId = String(table === 'settings' ? (data.key || docSnap.id) : (data.id !== undefined ? data.id : docSnap.id));
             remoteIds.add(docId);
 
@@ -880,9 +888,13 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
     `);
   } catch (e) {}
 
-  // Re-seed default settings and seed users in SQLite
+  // Re-seed default settings and seed users in SQLite (preserving existing custom exchange rate)
   try {
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('exchange_rate', '6.96');
+    const existingRate = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate') as any;
+    const rateToPreserve = (existingRate && existingRate.value && !isNaN(parseFloat(existingRate.value)) && parseFloat(existingRate.value) > 0)
+      ? String(existingRate.value)
+      : '6.96';
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('exchange_rate', rateToPreserve);
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('seeded_products', 'true');
   } catch (e) {}
 

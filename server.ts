@@ -10,10 +10,11 @@ import jwt from "jsonwebtoken";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { db, getBoliviaISOString, insertSystemAuditLog } from "./database.ts";
+import { hashPassword, verifyPassword, isPasswordHashed, getJwtSecret } from "./authSecurity.ts";
 import { normalizeProductName } from "./src/utils/productUtils.ts";
 import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData, recordDeletion, deleteFromFirestore } from "./firebaseSync.ts";
-import { requestContextStorage, getRecentFirestoreLedger, getFirestoreLedgerStats } from "./firestoreIntegrityMiddleware.ts";
-import { collection, getDocs } from "firebase/firestore";
+import { requestContextStorage, getRecentFirestoreLedger, getFirestoreLedgerStats, validateFirestoreWriteOperation } from "./firestoreIntegrityMiddleware.ts";
+import { collection, getDocs, doc, getDoc, setDoc } from "firebase/firestore";
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration } from "@google/genai";
 import { WebSocketServer } from "ws";
 import http from "http";
@@ -113,7 +114,7 @@ function listFilesRecursively(dir: string, baseDir: string = dir): string[] {
   return results;
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || "default_super_secret_gtr_pos";
+const JWT_SECRET = getJwtSecret(db);
 
 async function startServer() {
   const app = express();
@@ -140,9 +141,8 @@ async function startServer() {
   app.use(express.json({ limit: "15mb" }));
   app.use(express.urlencoded({ limit: "15mb", extended: true }));
 
-  // Audit User Context Extraction Middleware
+  // Audit User Context Extraction Middleware & Strict Authentication Gate
   app.use((req, res, next) => {
-    // SECURITY FIX: Verify JWT Token
     const authHeader = req.headers['authorization'] || req.headers['Authorization'];
     let verifiedUser: any = null;
     let authError = null;
@@ -150,17 +150,19 @@ async function startServer() {
     if (authHeader && typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
       try {
-        verifiedUser = jwt.verify(token, JWT_SECRET);
-        
-        // Dynamic Sync: Fetch latest permissions and role from the database to reflect changes instantly
-        if (verifiedUser && verifiedUser.id) {
+        const decoded = jwt.verify(token, JWT_SECRET) as any;
+        if (decoded && decoded.id) {
+          // Dynamic Sync: Fetch latest permissions and role directly from database
           try {
-            const freshUser = db.prepare('SELECT id, username, role, permissions, email FROM users WHERE id = ?').get(verifiedUser.id) as any;
+            const freshUser = db.prepare('SELECT id, username, role, permissions, email FROM users WHERE id = ?').get(decoded.id) as any;
             if (freshUser) {
-              verifiedUser.username = freshUser.username;
-              verifiedUser.role = freshUser.role;
-              verifiedUser.permissions = JSON.parse(freshUser.permissions || "{}");
-              verifiedUser.email = freshUser.email;
+              verifiedUser = {
+                id: freshUser.id,
+                username: freshUser.username,
+                role: freshUser.role,
+                permissions: JSON.parse(freshUser.permissions || "{}"),
+                email: freshUser.email
+              };
             }
           } catch (dbErr: any) {
             console.warn("[Middleware Error] Failed to fetch fresh user details from database:", dbErr.message);
@@ -171,66 +173,52 @@ async function startServer() {
       }
     }
 
-    const isPublicRoute = req.url.includes('/auth/login') || req.url.includes('/auth/recover-password') || req.url.includes('/app-version') || req.url.includes('/sync/');
+    // Explicit list of public endpoints that do not require authentication
+    const publicPaths = [
+      '/api/health',
+      '/api/app-version',
+      '/api/auth/login',
+      '/api/auth/recover-password'
+    ];
+
+    const isPublicRoute = 
+      publicPaths.includes(req.path) ||
+      req.path.startsWith('/api/sync/') ||
+      (req.method === 'GET' && (
+        req.path === '/api/settings/exchange-rate' ||
+        req.path === '/api/settings/kiosk' ||
+        req.path === '/api/settings/receipt'
+      ));
     
     if (req.url.startsWith('/api') && !isPublicRoute) {
       if (!verifiedUser) {
-        // Fallback: Check if x-user-id, x-user-username, or user_id in request matches SQLite DB user
-        const headerUserId = req.headers['x-user-id'] || req.query.user_id || req.body?.user_id;
-        const headerUsername = req.headers['x-user-username'] || req.query.username;
-        let dbUser: any = null;
-        if (headerUserId) {
-          try {
-            dbUser = db.prepare('SELECT id, username, role, permissions, email FROM users WHERE id = ?').get(headerUserId);
-          } catch (e) {}
-        }
-        if (!dbUser && headerUsername) {
-          try {
-            dbUser = db.prepare('SELECT id, username, role, permissions, email FROM users WHERE username = ?').get(headerUsername);
-          } catch (e) {}
-        }
-        if (!dbUser) {
-          // Default fallback to active primary admin/propietario user in local database
-          try {
-            dbUser = db.prepare("SELECT id, username, role, permissions, email FROM users ORDER BY CASE WHEN role IN ('admin', 'propietario', 'administrador') THEN 0 ELSE 1 END, id ASC LIMIT 1").get();
-          } catch (e) {}
-        }
-        if (dbUser) {
-          verifiedUser = {
-            id: dbUser.id,
-            username: dbUser.username,
-            role: dbUser.role,
-            permissions: JSON.parse(dbUser.permissions || "{}"),
-            email: dbUser.email
-          };
-        }
-      }
-
-      if (!verifiedUser) {
-        return res.status(401).json({ error: 'No autorizado. Token inválido o ausente: ' + (authError || '') });
+        return res.status(401).json({ 
+          error: 'No autorizado. Se requiere iniciar sesión con credenciales válidas.',
+          details: authError || 'Token de acceso ausente o expirado'
+        });
       }
       
-      // Populate request headers with verified user context
+      // Populate verified user context into request object & headers
+      (req as any).verifiedUser = verifiedUser;
       req.headers['x-user-id'] = String(verifiedUser.id);
       req.headers['x-user-role'] = String(verifiedUser.role);
       req.headers['x-user-username'] = String(verifiedUser.username);
-      if (verifiedUser.permissions) {
-        req.headers['x-user-permissions'] = typeof verifiedUser.permissions === 'string' 
-          ? verifiedUser.permissions 
-          : JSON.stringify(verifiedUser.permissions);
-      }
+      req.headers['x-user-permissions'] = JSON.stringify(verifiedUser.permissions || {});
+    } else if (verifiedUser) {
+      (req as any).verifiedUser = verifiedUser;
+      req.headers['x-user-id'] = String(verifiedUser.id);
+      req.headers['x-user-role'] = String(verifiedUser.role);
+      req.headers['x-user-username'] = String(verifiedUser.username);
+      req.headers['x-user-permissions'] = JSON.stringify(verifiedUser.permissions || {});
     }
 
-    const userId = req.headers['x-user-id'] || req.query.user_id || req.body?.user_id || req.body?.userId;
-    const userName = req.headers['x-user-username'] || req.headers['x-user-name'] || req.query.user_name || req.body?.userName || req.body?.username;
-    const userRole = req.headers['x-user-role'] || req.query.user_role || req.body?.user_role || req.body?.role;
     const userAgent = req.headers['user-agent'] || '';
     const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
 
     (req as any).auditUser = {
-      userId: userId ? parseInt(String(userId)) : null,
-      userName: userName ? String(userName) : null,
-      userRole: userRole ? String(userRole) : null,
+      userId: verifiedUser ? verifiedUser.id : null,
+      userName: verifiedUser ? verifiedUser.username : 'anónimo',
+      userRole: verifiedUser ? verifiedUser.role : 'invitado',
       userAgent: typeof userAgent === 'string' ? userAgent : '',
       ipAddress: Array.isArray(ipAddress) ? ipAddress[0] : String(ipAddress || ''),
     };
@@ -321,22 +309,18 @@ async function startServer() {
 
   const enforcePermission = (permissionKey: string) => {
     return (req: any, res: any, next: any) => {
-      const userRole = req.headers['x-user-role'] || req.query.user_role;
-      if (!userRole) {
-        return next();
+      const user = (req as any).verifiedUser;
+      if (!user) {
+        return res.status(401).json({ error: 'No autorizado. Se requiere iniciar sesión con un usuario válido.' });
       }
-      if (userRole === 'admin' || userRole === 'administrador') {
+
+      const userRole = String(user.role || '').toLowerCase();
+      if (userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || isMainAdmin(user)) {
         return next();
       }
 
-      // Read permissions from headers
-      const userPermissionsRaw = req.headers['x-user-permissions'] || req.query.user_permissions;
-      let permissions: any = {};
-      try {
-        if (userPermissionsRaw) {
-          permissions = JSON.parse(String(userPermissionsRaw));
-        }
-      } catch (err) {}
+      // Read authoritative permissions from verified user
+      const permissions = user.permissions || {};
 
       // If custom permission is defined, respect it; otherwise, fall back to defaults
       const isAllowed = permissions[permissionKey] !== undefined 
@@ -347,7 +331,7 @@ async function startServer() {
         return next();
       }
 
-      // Otherwise log a failed system audit log and reject!
+      // Log unauthorized attempt in system audit logs
       try {
         const auditUser = req.auditUser || {};
         insertSystemAuditLog({
@@ -359,16 +343,48 @@ async function startServer() {
           entityType: 'permiso',
           entityId: null,
           entityName: permissionKey,
-          userId: auditUser.userId || 1,
-          userName: auditUser.userName || 'usuario_restringido',
-          userRole: auditUser.userRole || String(userRole),
-          reason: `Intento fallido de ejecutar acción sin el permiso requerido: ${permissionKey}`,
+          userId: auditUser.userId || user.id,
+          userName: auditUser.userName || user.username,
+          userRole: auditUser.userRole || userRole,
+          reason: `Intento de ejecutar acción sin el permiso requerido: ${permissionKey}`,
           status: 'failed'
         });
       } catch (err) {}
 
       return res.status(403).json({ error: `No tienes los privilegios necesarios para realizar esta acción (${permissionKey}).` });
     };
+  };
+
+  const enforceAdmin = (req: any, res: any, next: any) => {
+    const user = (req as any).verifiedUser;
+    if (!user) {
+      return res.status(401).json({ error: 'No autorizado. Se requiere iniciar sesión como administrador.' });
+    }
+
+    const userRole = String(user.role || '').toLowerCase();
+    if (userRole === 'admin' || userRole === 'administrador' || userRole === 'propietario' || isMainAdmin(user)) {
+      return next();
+    }
+
+    try {
+      insertSystemAuditLog({
+        eventType: 'denegacion_acceso',
+        category: 'usuarios',
+        module: 'seguridad',
+        action: 'Intento de Acceso a Función Administrativa',
+        severity: 'critical',
+        entityType: 'rol',
+        entityId: null,
+        entityName: 'admin',
+        userId: user.id,
+        userName: user.username,
+        userRole: userRole,
+        reason: 'Intento de acceso a endpoint restringido a administradores',
+        status: 'failed'
+      });
+    } catch (err) {}
+
+    return res.status(403).json({ error: 'Acceso denegado: se requieren privilegios de administrador.' });
   };
 
   // Background Synchronization: Non-blocking background sync with a 5-minute cooldown
@@ -488,11 +504,30 @@ async function startServer() {
   // REST API: Authentication & Roles
   app.post("/api/auth/login", loginLimiter, (req, res) => {
     const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "Nombre de usuario y contraseña requeridos" });
+    }
+
     try {
-      const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password) as any;
-      if (user) {
+      const user = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(username) as any;
+      if (user && verifyPassword(password, user.password)) {
+        // Transparent migration: If stored password was in legacy plaintext, automatically upgrade to scrypt hash
+        if (!isPasswordHashed(user.password)) {
+          try {
+            const upgradedHash = hashPassword(password);
+            db.prepare('UPDATE users SET password = ? WHERE id = ?').run(upgradedHash, user.id);
+            console.log(`[Auth Security] Auto-upgraded password for user '${user.username}' to cryptographically strong scrypt hash.`);
+          } catch (upgradeErr: any) {
+            console.warn("[Auth Security Warning] Could not upgrade password hash on login:", upgradeErr.message);
+          }
+        }
+
         const permissions = JSON.parse(user.permissions || "{}");
-        const token = jwt.sign({ id: user.id, username: user.username, role: user.role, permissions, email: user.email }, JWT_SECRET);
+        const token = jwt.sign(
+          { id: user.id, username: user.username, role: user.role, permissions, email: user.email }, 
+          JWT_SECRET,
+          { expiresIn: '24h' }
+        );
 
         // Audit success login
         insertSystemAuditLog({
@@ -546,32 +581,24 @@ async function startServer() {
 
   app.get("/api/auth/me", (req, res) => {
     try {
-      const auditUser = (req as any).auditUser || {};
-      const userId = req.headers['x-user-id'] || auditUser.userId;
-      let user: any = null;
-      if (userId) {
-        user = db.prepare('SELECT id, username, role, permissions, email FROM users WHERE id = ?').get(userId) as any;
-      }
+      const user = (req as any).verifiedUser;
       if (!user) {
-        user = db.prepare("SELECT id, username, role, permissions, email FROM users ORDER BY CASE WHEN role IN ('admin', 'propietario', 'administrador') THEN 0 ELSE 1 END, id ASC LIMIT 1").get() as any;
+        return res.status(401).json({ error: "No autenticado. Se requiere token de sesión válido." });
       }
-      if (user) {
-        const permissions = JSON.parse(user.permissions || "{}");
-        const versionRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_version") as any;
-        const currentServerVersion = versionRow ? versionRow.value : "2.4.0";
-        res.json({ 
-          id: user.id, 
-          username: user.username, 
-          role: user.role, 
-          permissions, 
-          email: user.email,
-          app_version: currentServerVersion,
-          server_version: currentServerVersion,
-          version: currentServerVersion
-        });
-      } else {
-        res.status(404).json({ error: "Usuario no encontrado" });
-      }
+
+      const permissions = user.permissions || {};
+      const versionRow = db.prepare("SELECT value FROM settings WHERE key = ?").get("app_version") as any;
+      const currentServerVersion = versionRow ? versionRow.value : "2.4.0";
+      res.json({ 
+        id: user.id, 
+        username: user.username, 
+        role: user.role, 
+        permissions, 
+        email: user.email,
+        app_version: currentServerVersion,
+        server_version: currentServerVersion,
+        version: currentServerVersion
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -616,7 +643,7 @@ async function startServer() {
   });
 
   // REST API: Save and trigger forced push update signal to all live terminal devices
-  app.post("/api/settings/app-version", (req, res) => {
+  app.post("/api/settings/app-version", enforcePermission('admin_settings'), (req, res) => {
     const { version, release_notes } = req.body;
     if (!version) {
       return res.status(400).json({ error: "Debe suministrar una versión válida." });
@@ -661,8 +688,14 @@ async function startServer() {
         return res.status(403).json({ error: "El nombre de usuario 'admin' o 'roby' está reservado exclusivamente para el Administrador Principal." });
       }
 
+      if (!password || !password.trim()) {
+        return res.status(400).json({ error: "La contraseña es requerida para nuevos usuarios." });
+      }
+
+      const securePassword = isPasswordHashed(password.trim()) ? password.trim() : hashPassword(password.trim());
+
       const result = db.prepare('INSERT INTO users (username, password, role, permissions, email) VALUES (?, ?, ?, ?, ?)')
-        .run(cleanUsername, password, role || 'vendedor', JSON.stringify(permissions || {}), email || null);
+        .run(cleanUsername, securePassword, role || 'vendedor', JSON.stringify(permissions || {}), email || null);
       
       // Audit user creation (Omit passwords for security)
       try {
@@ -696,7 +729,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/users", (req, res) => {
+  app.get("/api/users", enforcePermission('admin_users'), (req, res) => {
     try {
       const users = db.prepare('SELECT id, username, role, permissions, email FROM users').all();
       res.json(users.map((u: any) => ({ ...u, permissions: JSON.parse(u.permissions || "{}") })));
@@ -737,7 +770,9 @@ async function startServer() {
         }
 
         const oldUser = db.prepare('SELECT id, username, password, role, email, permissions FROM users WHERE id = ?').get(id) as any;
-        const finalPassword = password && password.trim() ? password.trim() : (oldUser ? oldUser.password : "");
+        const finalPassword = password && password.trim() 
+          ? (isPasswordHashed(password.trim()) ? password.trim() : hashPassword(password.trim()))
+          : (oldUser ? oldUser.password : "");
 
         db.prepare('UPDATE users SET username = ?, password = ?, role = ?, permissions = ?, email = ? WHERE id = ?')
           .run(targetUser.username, finalPassword, 'admin', JSON.stringify(fullPermissions), email || null, id);
@@ -766,7 +801,9 @@ async function startServer() {
         oldUser.permissions = JSON.parse(oldUser.permissions || "{}");
       }
 
-      const finalPassword = password && password.trim() ? password.trim() : (oldUser ? oldUser.password : "");
+      const finalPassword = password && password.trim() 
+        ? (isPasswordHashed(password.trim()) ? password.trim() : hashPassword(password.trim()))
+        : (oldUser ? oldUser.password : "");
 
       db.prepare('UPDATE users SET username = ?, password = ?, role = ?, permissions = ?, email = ? WHERE id = ?')
         .run(lowerNewUsername, finalPassword, role || 'vendedor', JSON.stringify(permissions || {}), email || null, id);
@@ -1603,20 +1640,34 @@ Responde estrictamente en formato JSON utilizando el esquema de salida indicado,
     }
   });
 
-  // REST API: Autonomous Patch Application
-  app.post("/api/diagnose/apply-patch", async (req, res) => {
+  // REST API: Autonomous Patch Application (Hardened & Restricted to Admin Sandbox)
+  app.post("/api/diagnose/apply-patch", enforceAdmin, async (req, res) => {
     const { filePath, targetContent, replacementContent } = req.body;
     if (!filePath || !targetContent || !replacementContent) {
       return res.status(400).json({ error: "Faltan parámetros requeridos: filePath, targetContent, replacementContent" });
     }
 
     try {
-      const normalized = path.normalize(filePath);
-      if (normalized.startsWith("..") || path.isAbsolute(normalized)) {
-        return res.status(400).json({ error: "Ruta de archivo inválida. Debe ser relativa al directorio de trabajo." });
+      const normalized = path.normalize(filePath).replace(/^[/\\]+/, '');
+      
+      // Sandbox constraint: Only permit modifying files inside the client src directory
+      const isAllowedSrc = normalized.startsWith('src/') || normalized.startsWith('src\\');
+      const ext = path.extname(normalized).toLowerCase();
+      const isAllowedExt = ['.ts', '.tsx', '.css', '.json'].includes(ext);
+      const isForbiddenFile = normalized.includes('.env') || normalized.includes('.git') || normalized.includes('node_modules') || normalized.includes('.db') || normalized.includes('.sqlite');
+
+      if (!isAllowedSrc || !isAllowedExt || isForbiddenFile) {
+        return res.status(403).json({ 
+          error: "Operación denegada por seguridad: Solo se permite aplicar parches en componentes de interfaz dentro del directorio 'src' (.ts, .tsx, .css)." 
+        });
       }
 
-      const fullPath = path.join(process.cwd(), normalized);
+      const fullPath = path.resolve(process.cwd(), normalized);
+      const rootPath = path.resolve(process.cwd(), 'src');
+      if (!fullPath.startsWith(rootPath)) {
+        return res.status(403).json({ error: "Intento de escape de sandbox detectado." });
+      }
+
       if (!fs.existsSync(fullPath)) {
         return res.status(404).json({ error: `El archivo '${normalized}' no existe.` });
       }
@@ -1648,6 +1699,29 @@ Responde estrictamente en formato JSON utilizando el esquema de salida indicado,
 
       // Safe write back
       fs.writeFileSync(fullPath, updatedContent, "utf-8");
+
+      // Audit patch application
+      try {
+        const user = (req as any).verifiedUser || {};
+        insertSystemAuditLog({
+          eventType: 'aplicacion_parche',
+          category: 'sistema',
+          module: 'diagnostico',
+          action: 'Aplicación de Parche de Código',
+          severity: 'critical',
+          entityType: 'archivo',
+          entityId: null,
+          entityName: normalized,
+          userId: user.id,
+          userName: user.username,
+          userRole: user.role,
+          reason: 'Parche aplicado desde consola de diagnóstico',
+          status: 'success'
+        });
+      } catch (auditErr: any) {
+        console.warn("[Audit Warning] Failed to log patch application:", auditErr.message);
+      }
+
       res.json({ success: true, message: `El código de '${normalized}' ha sido parchado y guardado con éxito.` });
 
     } catch (err: any) {
@@ -3296,7 +3370,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   });
 
   // REST API: Backup & Restore (JSON representation of the system databases)
-  app.get("/api/backup/download-db", (req, res) => {
+  app.get("/api/backup/download-db", enforcePermission('admin_settings'), (req, res) => {
     try {
       const dbPath = path.resolve(process.cwd(), "gtr_pos.db");
       if (fs.existsSync(dbPath)) {
@@ -3309,7 +3383,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
-  app.get("/api/backup", (req, res) => {
+  app.get("/api/backup", enforcePermission('admin_settings'), (req, res) => {
     try {
       // Dynamically discover all user tables in SQLite database to guarantee 100% table coverage
       const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'gsi_%'").all() as { name: string }[];
@@ -3389,7 +3463,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   });
 
   // Validation endpoint prior to restoring backup
-  app.post("/api/backup/validate", (req, res) => {
+  app.post("/api/backup/validate", enforcePermission('admin_settings'), (req, res) => {
     try {
       const backupContent = req.body;
       if (!backupContent || typeof backupContent !== 'object') {
@@ -3445,7 +3519,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
-  app.post("/api/backup/import", async (req, res) => {
+  app.post("/api/backup/import", enforcePermission('admin_settings'), async (req, res) => {
     try {
       const { data } = req.body;
       const rawData = data || req.body.backupData || req.body;
@@ -3467,6 +3541,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       let totalRestoredRows = 0;
       const restoredRecordCounts: Record<string, number> = {};
 
+      // Whitelist existing database tables
+      const existingTables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as any[]).map(t => t.name);
+
       // 2. Execute restoration within a single atomic transaction
       const importTx = db.transaction(() => {
         // Temporarily disable foreign keys to allow mass restoration regardless of table order
@@ -3474,6 +3551,12 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
         for (const tableName of Object.keys(rawData)) {
           if (!Array.isArray(rawData[tableName])) continue;
+
+          // Security check: only restore recognized tables
+          if (!existingTables.includes(tableName)) {
+            console.warn(`[Restore Security] Skipped unknown table: ${tableName}`);
+            continue;
+          }
 
           const rows = rawData[tableName];
           restoredRecordCounts[tableName] = rows.length;
@@ -3486,11 +3569,17 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
           if (rows.length === 0) continue;
 
-          // Collect all column names across all rows
+          // Collect valid column names for this specific table
+          const dbTableCols = (db.prepare(`PRAGMA table_info("${tableName}")`).all() as any[]).map(c => c.name);
+
           const allKeysSet = new Set<string>();
           for (const r of rows) {
             if (r && typeof r === 'object') {
-              Object.keys(r).forEach(k => allKeysSet.add(k));
+              Object.keys(r).forEach(k => {
+                if (dbTableCols.includes(k)) {
+                  allKeysSet.add(k);
+                }
+              });
             }
           }
           const colNames = Array.from(allKeysSet);
@@ -3501,6 +3590,10 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           const stmt = db.prepare(insertSql);
 
           for (const r of rows) {
+            // If restoring users table, ensure passwords are validly hashed
+            if (tableName === 'users' && r.password && !isPasswordHashed(r.password)) {
+              r.password = hashPassword(r.password);
+            }
             const values = colNames.map(col => r[col] !== undefined ? r[col] : null);
             stmt.run(...values);
             totalRestoredRows++;
@@ -5507,9 +5600,26 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
   });
 
   // REST API: Exchange Rate Configuration
-  app.get("/api/settings/exchange-rate", (req, res) => {
+  app.get("/api/settings/exchange-rate", async (req, res) => {
     try {
-      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate') as any;
+      let row = db.prepare('SELECT value FROM settings WHERE key = ?').get('exchange_rate') as any;
+      // If SQLite has no rate or currently has default 6.96, query Firestore to prevent race conditions on cold start
+      if ((!row || row.value === '6.96') && firestore) {
+        try {
+          const docRef = doc(firestore, 'settings', 'exchange_rate');
+          const snap = await getDoc(docRef);
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data && data.value && !isNaN(parseFloat(data.value)) && parseFloat(data.value) > 0) {
+              const fsRate = String(data.value);
+              db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('exchange_rate', fsRate);
+              row = { value: fsRate };
+            }
+          }
+        } catch (fsErr: any) {
+          // Gracefully continue with local value if Firestore is temporarily offline
+        }
+      }
       const rate = row ? parseFloat(row.value) : 6.96;
       res.json({ exchange_rate: rate });
     } catch (e: any) {
@@ -5517,7 +5627,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
-  app.post("/api/settings/exchange-rate", (req, res) => {
+  app.post("/api/settings/exchange-rate", async (req, res) => {
     const { rate, user } = req.body;
     if (!user || user.role !== 'admin') {
       return res.status(403).json({ error: "No autorizado. Solo administradores pueden cambiar el tipo de cambio." });
@@ -5536,6 +5646,27 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
           .run(user.id, user.username, oldRate, numRate);
       });
       transaction();
+
+      // Immediate synchronous persistence to Cloud Firestore
+      if (firestore) {
+        try {
+          const validation = validateFirestoreWriteOperation(
+            'settings',
+            'exchange_rate',
+            'CREATE',
+            { key: 'exchange_rate', value: String(numRate) },
+            {
+              userId: user.id,
+              userName: user.username,
+              userRole: user.role,
+              isSystemDaemon: false
+            }
+          );
+          await setDoc(doc(firestore, 'settings', 'exchange_rate'), validation.enrichedPayload);
+        } catch (fsErr: any) {
+          console.warn("[ExchangeRate] Firestore setDoc note:", fsErr.message);
+        }
+      }
       
       try {
         insertSystemAuditLog({
@@ -5560,7 +5691,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         console.warn("[Audit Error] Failed to log exchange rate change:", auditErr.message);
       }
 
-      syncAfterWrite(["settings", "exchange_rate_audit", "system_audit_logs"]);
+      syncAfterWrite(["exchange_rate_audit", "system_audit_logs"]);
       res.json({ success: true, old_rate: oldRate, new_rate: numRate });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -7643,8 +7774,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
                       edit_prices: editPrices !== undefined ? !!editPrices : true,
                       view_inventory: viewInventory !== undefined ? !!viewInventory : true
                     };
+                    const hashedPassword = isPasswordHashed(password) ? password : hashPassword(password);
                     const resUser = db.prepare('INSERT INTO users (username, password, role, permissions) VALUES (?, ?, ?, ?)')
-                      .run(username, password, role, JSON.stringify(permissions));
+                      .run(username, hashedPassword, role, JSON.stringify(permissions));
                     syncAfterWrite("users");
 
                     // Notify clients

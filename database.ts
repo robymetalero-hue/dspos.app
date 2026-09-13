@@ -3,6 +3,7 @@ process.env.TZ = 'America/La_Paz';
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { hashPassword, isPasswordHashed } from './authSecurity.ts';
 
 // Helper to get current Bolivia time as ISO 8601 with offset
 export function getBoliviaISOString(): string {
@@ -649,7 +650,7 @@ try {
 
 // Seed Admin Users
 const seedUser = (username: string, email: string, pass: string) => {
-  const exists = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+  const exists = db.prepare('SELECT id, password FROM users WHERE username = ?').get(username) as any;
   const permissions = JSON.stringify({
     create_sales: true,
     add_to_cart: true,
@@ -716,20 +717,33 @@ const seedUser = (username: string, email: string, pass: string) => {
     view_audit: true,
     view_reports: true // legacy
   });
+  const securePass = isPasswordHashed(pass) ? pass : hashPassword(pass);
   if (!exists) {
     db.prepare('INSERT INTO users (username, password, role, permissions, email) VALUES (?, ?, ?, ?, ?)')
-      .run(username, pass, 'admin', permissions, email);
+      .run(username, securePass, 'admin', permissions, email);
   } else {
-    // Ensure email and permissions are updated for seed users
-    db.prepare('UPDATE users SET email = ?, password = COALESCE(password, ?), permissions = ? WHERE username = ?').run(email, pass, permissions, username);
+    // Ensure email, permissions, and hashed password are upgraded for seed users
+    const currentPass = exists.password;
+    const finalPass = isPasswordHashed(currentPass) ? currentPass : hashPassword(currentPass || pass);
+    db.prepare('UPDATE users SET email = ?, password = ?, permissions = ? WHERE username = ?').run(email, finalPass, permissions, username);
   }
 };
 
 try {
   seedUser('admin', 'robymetalero@gmail.com', '1234');
   seedUser('roby', 'robymetalero@gmail.com', '1234');
+
+  // Automatic Migration: Upgrade all existing user records with plaintext passwords to scrypt hashes
+  const allUsers = db.prepare('SELECT id, username, password FROM users').all() as any[];
+  for (const u of allUsers) {
+    if (u.password && !isPasswordHashed(u.password)) {
+      const hashed = hashPassword(u.password);
+      db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashed, u.id);
+      console.log(`[Database Migration] Migrated password for user '${u.username}' to secure scrypt hash.`);
+    }
+  }
 } catch (e: any) {
-  console.error("Error seeding users:", e.message);
+  console.error("Error seeding users or migrating passwords:", e.message);
 }
 
 // Seed Demo Products

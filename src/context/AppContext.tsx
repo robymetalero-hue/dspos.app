@@ -481,7 +481,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 timeoutId = setTimeout(() => controller.abort(), 4000);
                 signal = controller.signal;
             }
-            const response = await fetch(url, { ...options, signal });
+
+            // Automatically inject Authorization token if available in local storage
+            const token = typeof localStorage !== 'undefined' ? localStorage.getItem('auth_token') : null;
+            const finalHeaders: Record<string, string> = {};
+            if (options?.headers) {
+                if (options.headers instanceof Headers) {
+                    options.headers.forEach((val, key) => { finalHeaders[key] = val; });
+                } else if (Array.isArray(options.headers)) {
+                    options.headers.forEach(([key, val]) => { finalHeaders[key] = val; });
+                } else {
+                    Object.assign(finalHeaders, options.headers);
+                }
+            }
+            if (token && !finalHeaders['Authorization'] && !finalHeaders['authorization']) {
+                finalHeaders['Authorization'] = `Bearer ${token}`;
+            }
+
+            const response = await fetch(url, { ...options, headers: finalHeaders, signal });
             if (timeoutId) clearTimeout(timeoutId);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -835,6 +852,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const safe = (isNaN(parsed) || parsed <= 0) ? 6.96 : parsed;
             setExchangeRateInternal(safe);
             localStorage.setItem('cached_exchange_rate', String(safe));
+            cacheAppState('cached_exchange_rate', safe).catch(() => {});
         } catch {
             setExchangeRateInternal(6.96);
         }
@@ -887,18 +905,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const res = await fetchWithRetry('/api/settings/exchange-rate');
             const data = await res.json();
             const rawRate = data ? data.exchange_rate : null;
-            const rate = (rawRate !== undefined && rawRate !== null) ? parseFloat(rawRate) : 6.96;
-            const safeRate = (isNaN(rate) || rate <= 0) ? 6.96 : rate;
-            setExchangeRate(safeRate);
+            if (rawRate !== undefined && rawRate !== null) {
+                const rate = parseFloat(rawRate);
+                if (!isNaN(rate) && rate > 0) {
+                    setExchangeRate(rate);
+                }
+            }
             setIsOffline(false);
         } catch (e) {
             console.warn("Failed to fetch exchange rate, using cached value:", e);
             const cached = localStorage.getItem('cached_exchange_rate');
             if (cached) {
                 const parsed = parseFloat(cached);
-                setExchangeRate(isNaN(parsed) || parsed <= 0 ? 6.96 : parsed);
-            } else {
-                setExchangeRate(6.96);
+                if (!isNaN(parsed) && parsed > 0) {
+                    setExchangeRate(parsed);
+                }
             }
             if (e instanceof Error && (e.message.includes('Failed to fetch') || e.message.includes('fetch'))) {
                 setIsOffline(true);

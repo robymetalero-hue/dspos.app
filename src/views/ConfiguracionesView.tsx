@@ -1,7 +1,7 @@
 import { backupDatabaseToDrive } from "../utils/driveBackup";
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { Settings, TrendingUp, History, ShieldAlert, Lock, Save, Cloud, Database, Download, Upload, FileJson, RefreshCw, DollarSign, Info, ShieldCheck, Receipt, Eye, Sliders, Type, RotateCcw, Printer, Users, Star, Trash2, Search, CloudUpload, CloudDownload, Activity, Smartphone, Sparkles } from 'lucide-react';
+import { Settings, TrendingUp, History, ShieldAlert, Lock, Save, Cloud, Database, Download, Upload, FileJson, RefreshCw, DollarSign, Info, ShieldCheck, Receipt, Eye, Sliders, Type, RotateCcw, Printer, Users, Star, Trash2, Search, CloudUpload, CloudDownload, Activity, Smartphone, Sparkles, HardDrive, Archive } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import RgbCustomizerPanel from '../components/RgbCustomizerPanel';
 import { saveOfflineAction, clearAllOfflineStorage } from '../utils/offlineStorage';
@@ -566,6 +566,97 @@ export default function ConfiguracionesView() {
         } finally {
             setIsRestoringSafety(false);
         }
+    };
+
+    // --- Automatic & Rolling Snapshots (Data Loss Prevention) ---
+    const [snapshots, setSnapshots] = useState<Array<{ filename: string; sizeBytes: number; createdAt: string; formattedDate: string }>>([]);
+    const [isLoadingSnapshots, setIsLoadingSnapshots] = useState<boolean>(false);
+    const [isCreatingSnapshot, setIsCreatingSnapshot] = useState<boolean>(false);
+
+    const fetchSnapshots = async () => {
+        setIsLoadingSnapshots(true);
+        try {
+            const token = localStorage.getItem('auth_token') || '';
+            const res = await fetch('/api/backup/snapshots', {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'x-user-role': user?.role || 'admin'
+                }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setSnapshots(data.snapshots || []);
+            }
+        } catch (e) {
+            console.warn("Failed to fetch snapshots:", e);
+        } finally {
+            setIsLoadingSnapshots(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchSnapshots();
+    }, []);
+
+    const handleCreateSnapshot = async () => {
+        setIsCreatingSnapshot(true);
+        try {
+            const token = localStorage.getItem('auth_token') || '';
+            const res = await fetch('/api/backup/create-snapshot', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'x-user-role': user?.role || 'admin'
+                }
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                showNotification?.("✓ " + data.message, "success");
+                await fetchSnapshots();
+            } else {
+                throw new Error(data.error || "No se pudo crear la instantánea");
+            }
+        } catch (err: any) {
+            showNotification?.("Error: " + err.message, "error");
+        } finally {
+            setIsCreatingSnapshot(false);
+        }
+    };
+
+    const handleRestoreSnapshot = async (filename: string) => {
+        if (!window.confirm(`⚠️ ¿Deseas RESTAURAR la instantánea "${filename}"? Tu base actual se respaldará automáticamente como copia de seguridad previa.`)) return;
+        setIsRestoringSafety(true);
+        try {
+            const token = localStorage.getItem('auth_token') || '';
+            const res = await fetch(`/api/backup/restore-snapshot/${encodeURIComponent(filename)}`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'x-user-role': user?.role || 'admin'
+                }
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                showNotification?.("✓ " + data.message, "success");
+                setTimeout(() => window.location.reload(), 1500);
+            } else {
+                throw new Error(data.error || "Error al restaurar");
+            }
+        } catch (err: any) {
+            showNotification?.("Error: " + err.message, "error");
+        } finally {
+            setIsRestoringSafety(false);
+        }
+    };
+
+    const handleDownloadRawDb = () => {
+        window.location.href = '/api/backup/download-db';
+        showNotification?.("Descargando archivo de base de datos nativa gtr_pos.db...", "info");
+    };
+
+    const handleDownloadSnapshotFile = (filename: string) => {
+        window.location.href = `/api/backup/download-snapshot/${encodeURIComponent(filename)}`;
+        showNotification?.(`Descargando instantánea ${filename}...`, "info");
     };
 
     const handleOpenResetModal = () => {
@@ -1657,7 +1748,7 @@ export default function ConfiguracionesView() {
                         )}
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {/* Export Button */}
+                            {/* Export Button (JSON) */}
                             <button
                                 type="button"
                                 disabled={isBackingUp || isImporting}
@@ -1666,8 +1757,22 @@ export default function ConfiguracionesView() {
                             >
                                 <Download size={22} className="text-[#6366f1] transition group-hover:scale-110" />
                                 <div className="flex flex-col gap-0.5">
-                                    <span className="text-[11.5px] font-extrabold text-slate-800 dark:text-slate-200">Exportar Base de Datos</span>
-                                    <span className="text-[9px] font-bold text-slate-400">Descargar copia (.json)</span>
+                                    <span className="text-[11.5px] font-extrabold text-slate-800 dark:text-slate-200">Exportar Base JSON</span>
+                                    <span className="text-[9px] font-bold text-slate-400">Descargar copia completa (.json)</span>
+                                </div>
+                            </button>
+
+                            {/* Raw SQLite DB Download */}
+                            <button
+                                type="button"
+                                disabled={isBackingUp || isImporting}
+                                onClick={handleDownloadRawDb}
+                                className="p-4 bg-white hover:bg-slate-50/80 dark:bg-[#0c111e] dark:hover:bg-slate-900/60 border border-slate-205 dark:border-slate-850 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-[#6366f1]/40 animate-in fade-in"
+                            >
+                                <HardDrive size={22} className="text-cyan-600 dark:text-cyan-400 transition group-hover:scale-110" />
+                                <div className="flex flex-col gap-0.5">
+                                    <span className="text-[11.5px] font-extrabold text-slate-800 dark:text-slate-200">Descargar SQLite Nativo</span>
+                                    <span className="text-[9px] font-bold text-slate-400">Archivo binario real (gtr_pos.db)</span>
                                 </div>
                             </button>
 
@@ -1685,8 +1790,24 @@ export default function ConfiguracionesView() {
                                 </div>
                             </button>
 
+                            {/* Create Immediate Snapshot Button */}
+                            <button
+                                type="button"
+                                disabled={isCreatingSnapshot || isRestoringSafety}
+                                onClick={handleCreateSnapshot}
+                                className="sm:col-span-2 p-4 bg-gradient-to-r from-cyan-50 to-blue-50/60 dark:from-[#0c111e] dark:hover:bg-slate-900/60 border border-cyan-200 dark:border-cyan-950/40 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-cyan-500/40 animate-in fade-in"
+                            >
+                                <Archive size={22} className={`text-cyan-600 dark:text-cyan-400 transition group-hover:scale-110 ${isCreatingSnapshot ? 'animate-spin' : ''}`} />
+                                <div className="flex flex-col gap-0.5">
+                                    <span className="text-[11.5px] font-extrabold text-slate-800 dark:text-slate-200">
+                                        {isCreatingSnapshot ? 'Generando Instantánea...' : 'Crear Instantánea Local de Seguridad Ahora'}
+                                    </span>
+                                    <span className="text-[9px] font-bold text-slate-400">Crea un punto de restauración exacto sin cerrar caja ni interrumpir</span>
+                                </div>
+                            </button>
+
                             {/* Import File Button wrapper */}
-                            <label className={`p-4 bg-white hover:bg-slate-50/80 dark:bg-[#0c111e] dark:hover:bg-slate-900/60 border border-slate-205 dark:border-slate-850 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-[#6366f1]/40 relative ${isImporting || isValidatingFile ? 'opacity-65 pointer-events-none' : ''} animate-in fade-in`}>
+                            <label className={`p-4 bg-white hover:bg-slate-50/80 dark:bg-[#0c111e] dark:hover:bg-slate-900/60 border border-slate-205 dark:border-slate-850 rounded-2xl flex flex-col items-center justify-center text-center gap-2 cursor-pointer shadow-xs transition group hover:border-[#6366f1]/40 relative sm:col-span-2 ${isImporting || isValidatingFile ? 'opacity-65 pointer-events-none' : ''} animate-in fade-in`}>
                                 <input
                                     type="file"
                                     accept=".json"
@@ -1778,6 +1899,72 @@ export default function ConfiguracionesView() {
                                     <span className="text-[9.5px] font-medium text-rose-100">Pone a cero la base de datos (ventas, productos, clientes) tanto localmente como en Google Cloud</span>
                                 </div>
                             </button>
+                        </div>
+
+                        {/* Local Snapshots History Panel */}
+                        <div className="mt-2 border border-slate-200 dark:border-slate-850 bg-white dark:bg-[#070b13] rounded-2xl p-4 flex flex-col gap-3">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                    <Archive size={15} className="text-cyan-600 dark:text-cyan-400" />
+                                    <h4 className="text-[11px] font-extrabold uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                                        Puntos de Restauración Automáticos en Servidor ({snapshots.length})
+                                    </h4>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={fetchSnapshots}
+                                    disabled={isLoadingSnapshots}
+                                    className="px-2.5 py-1 text-[9.5px] font-bold rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 flex items-center gap-1 cursor-pointer transition"
+                                >
+                                    <RefreshCw size={11} className={isLoadingSnapshots ? 'animate-spin' : ''} />
+                                    Actualizar
+                                </button>
+                            </div>
+
+                            {snapshots.length === 0 ? (
+                                <p className="text-[10px] text-slate-400 italic py-2">
+                                    No hay instantáneas locales registradas aún. El servidor genera una automáticamente cada 4 horas y al arrancar.
+                                </p>
+                            ) : (
+                                <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                                    {snapshots.map((snap) => (
+                                        <div
+                                            key={snap.filename}
+                                            className="p-2.5 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-850 flex items-center justify-between gap-2 text-[10.5px]"
+                                        >
+                                            <div className="flex flex-col min-w-0">
+                                                <span className="font-bold text-slate-700 dark:text-slate-300 truncate font-mono text-[10px]">
+                                                    {snap.filename}
+                                                </span>
+                                                <span className="text-[9px] text-slate-400">
+                                                    {snap.formattedDate} • {(snap.sizeBytes / 1024).toFixed(1)} KB
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5 shrink-0">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleDownloadSnapshotFile(snap.filename)}
+                                                    className="px-2 py-1 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg text-[9px] font-bold flex items-center gap-1 border border-slate-200 dark:border-slate-700 cursor-pointer shadow-2xs"
+                                                    title="Descargar este punto de restauración"
+                                                >
+                                                    <Download size={10} />
+                                                    Descargar
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    disabled={isRestoringSafety}
+                                                    onClick={() => handleRestoreSnapshot(snap.filename)}
+                                                    className="px-2 py-1 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-600 hover:text-white text-rose-600 dark:text-rose-400 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 border border-rose-200 dark:border-rose-900/40 cursor-pointer transition shadow-2xs"
+                                                    title="Restaurar a este momento exacto"
+                                                >
+                                                    <RotateCcw size={10} />
+                                                    Restaurar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
 

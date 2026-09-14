@@ -3688,38 +3688,224 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
   });
 
+  const BACKUP_DIR = path.resolve(process.cwd(), "backups");
+  if (!fs.existsSync(BACKUP_DIR)) {
+    try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch (e) {}
+  }
+
+  function createLocalDbSnapshot(reason = 'manual') {
+    try {
+      const dbPath = path.resolve(process.cwd(), "gtr_pos.db");
+      if (!fs.existsSync(dbPath)) return null;
+
+      // Keep latest root copy
+      try { fs.copyFileSync(dbPath, path.resolve(process.cwd(), 'gtr_pos.db.bak')); } catch (e) {}
+
+      // Form sanitized date string
+      const dateStr = new Date().toISOString().replace(/[:.]/g, '-');
+      const safeReason = reason.replace(/[^a-zA-Z0-9_-]/g, '');
+      const filename = `snapshot_${dateStr}_${safeReason}.db`;
+      const destPath = path.join(BACKUP_DIR, filename);
+
+      fs.copyFileSync(dbPath, destPath);
+
+      // Rotate snapshots: maintain last 25 files
+      const existingFiles = fs.readdirSync(BACKUP_DIR)
+        .filter(f => f.startsWith('snapshot_') && f.endsWith('.db'))
+        .map(f => {
+          const p = path.join(BACKUP_DIR, f);
+          return { name: f, path: p, time: fs.statSync(p).mtimeMs };
+        })
+        .sort((a, b) => b.time - a.time);
+
+      if (existingFiles.length > 25) {
+        for (const oldFile of existingFiles.slice(25)) {
+          try { fs.unlinkSync(oldFile.path); } catch (e) {}
+        }
+      }
+
+      const stat = fs.statSync(destPath);
+      return {
+        filename,
+        sizeBytes: stat.size,
+        createdAt: new Date().toISOString()
+      };
+    } catch (err: any) {
+      console.warn("[Snapshot Warning] Failed to create local db snapshot:", err.message);
+      return null;
+    }
+  }
+
+  // Initial snapshot on server startup
+  try {
+    createLocalDbSnapshot('server_boot');
+  } catch (e) {}
+
+  // Periodic automatic snapshots every 4 hours
+  setInterval(() => {
+    try {
+      createLocalDbSnapshot('auto_interval');
+    } catch (e) {}
+  }, 4 * 60 * 60 * 1000);
+
+  // Endpoint: Create immediate snapshot
+  app.post("/api/backup/create-snapshot", enforcePermission('admin_settings'), (req, res) => {
+    try {
+      const snap = createLocalDbSnapshot('manual_admin');
+      if (snap) {
+        res.json({ success: true, snapshot: snap, message: "Instantánea local creada con éxito en el servidor." });
+      } else {
+        res.status(500).json({ error: "No se pudo generar la instantánea local." });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Endpoint: List all snapshots
+  app.get("/api/backup/snapshots", enforcePermission('admin_settings'), (req, res) => {
+    try {
+      if (!fs.existsSync(BACKUP_DIR)) {
+        return res.json({ snapshots: [] });
+      }
+
+      const files = fs.readdirSync(BACKUP_DIR)
+        .filter(f => f.startsWith('snapshot_') && f.endsWith('.db'))
+        .map(f => {
+          const filePath = path.join(BACKUP_DIR, f);
+          const stat = fs.statSync(filePath);
+          return {
+            filename: f,
+            sizeBytes: stat.size,
+            createdAt: stat.mtime.toISOString(),
+            formattedDate: stat.mtime.toLocaleString('es-BO', { timeZone: 'America/La_Paz' })
+          };
+        })
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      res.json({ snapshots: files });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Endpoint: Download specific snapshot
+  app.get("/api/backup/download-snapshot/:filename", enforcePermission('admin_settings'), (req, res) => {
+    try {
+      const filename = path.basename(req.params.filename);
+      const filePath = path.join(BACKUP_DIR, filename);
+      if (fs.existsSync(filePath)) {
+        res.download(filePath, filename);
+      } else {
+        res.status(404).json({ error: "Archivo de instantánea no encontrado." });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Endpoint: Restore from specific snapshot
+  app.post("/api/backup/restore-snapshot/:filename", enforcePermission('admin_settings'), async (req, res) => {
+    try {
+      const filename = path.basename(req.params.filename);
+      const filePath = path.join(BACKUP_DIR, filename);
+
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "Archivo de instantánea no encontrado en el servidor." });
+      }
+
+      // 1. Take safety snapshot of current state before restoration
+      createLocalDbSnapshot('pre_restore');
+
+      const DatabaseConstructor = (await import('better-sqlite3')).default;
+      const backupDb = new DatabaseConstructor(filePath);
+
+      // Discover 100% of user tables dynamically
+      const tables = (backupDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'gsi_%'").all() as any[]).map(t => t.name);
+
+      let restoredTablesCount = 0;
+      let restoredRowsCount = 0;
+
+      db.transaction(() => {
+        db.pragma('foreign_keys = OFF');
+        for (const table of tables) {
+          try {
+            const rows = backupDb.prepare(`SELECT * FROM "${table}"`).all();
+            db.prepare(`DELETE FROM "${table}"`).run();
+            if (rows.length === 0) continue;
+            const firstRowKeys = Object.keys(rows[0]);
+            const placeholders = firstRowKeys.map(() => '?').join(', ');
+            const insertSql = `INSERT OR REPLACE INTO "${table}" (${firstRowKeys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
+            const stmt = db.prepare(insertSql);
+            for (const r of rows) {
+              const values = firstRowKeys.map(k => r[k]);
+              stmt.run(...values);
+            }
+            restoredTablesCount++;
+            restoredRowsCount += rows.length;
+          } catch (tableErr: any) {
+            console.warn(`[Snapshot Restore] Table ${table} error:`, tableErr.message);
+          }
+        }
+        db.pragma('foreign_keys = ON');
+      })();
+
+      backupDb.close();
+
+      // Sync restored state with Cloud
+      await pushAllLocalToFirestore();
+
+      res.json({
+        success: true,
+        message: `¡Restauración completada! Se restauraron ${restoredRowsCount} registros en ${restoredTablesCount} tablas desde "${filename}".`
+      });
+    } catch (e: any) {
+      console.error("[Snapshot Restore Error]:", e);
+      res.status(500).json({ error: "Error al restaurar instantánea: " + e.message });
+    }
+  });
+
   app.post("/api/backup/restore-safety-backup", async (req, res) => {
     try {
       if (fs.existsSync('gtr_pos.db.bak')) {
+        // Create a pre-restore backup first
+        createLocalDbSnapshot('pre_safety_restore');
+
         const DatabaseConstructor = (await import('better-sqlite3')).default;
         const backupDb = new DatabaseConstructor('gtr_pos.db.bak');
-        const tables = ['users', 'products', 'clients', 'sales', 'sale_items', 'shifts', 'settings', 'exchange_rate_audit', 'caja_cierres', 'departments', 'stock_arrivals', 'pending_sales', 'pending_sale_items', 'accounts_receivable', 'credit_payments', 'pending_sale_payments', 'inventory_audit_logs', 'cash_accounts', 'cash_movements', 'cash_settlements', 'inventory_counts', 'inventory_count_items', 'system_audit_logs'];
+
+        // Dynamically discover all tables in backupDb to guarantee 100% coverage
+        const tables = (backupDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'gsi_%'").all() as any[]).map(t => t.name);
         
+        let restoredCount = 0;
         db.transaction(() => {
+          db.pragma('foreign_keys = OFF');
           for (const table of tables) {
             try {
-              const rows = backupDb.prepare(`SELECT * FROM ${table}`).all();
-              db.prepare(`DELETE FROM ${table}`).run();
+              const rows = backupDb.prepare(`SELECT * FROM "${table}"`).all();
+              db.prepare(`DELETE FROM "${table}"`).run();
               if (rows.length === 0) continue;
               const firstRowKeys = Object.keys(rows[0]);
               const placeholders = firstRowKeys.map(() => '?').join(', ');
-              const insertSql = `INSERT OR REPLACE INTO ${table} (${firstRowKeys.join(', ')}) VALUES (${placeholders})`;
+              const insertSql = `INSERT OR REPLACE INTO "${table}" (${firstRowKeys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders})`;
               const stmt = db.prepare(insertSql);
               for (const r of rows) {
                 const values = firstRowKeys.map(k => r[k]);
                 stmt.run(...values);
               }
+              restoredCount += rows.length;
             } catch (err: any) {
-              console.warn(`[Restore Safety] Table ${table} restore failed or table not found in backup:`, err.message);
+              console.warn(`[Restore Safety] Table ${table} restore warning:`, err.message);
             }
           }
+          db.pragma('foreign_keys = ON');
         })();
         backupDb.close();
         
         // Push restored data back up to Google Cloud Firestore immediately
         await pushAllLocalToFirestore();
         
-        res.json({ success: true, message: "¡Se ha restaurado la base de datos de respaldo local gtr_pos.db.bak con éxito y se ha sincronizado con Firestore!" });
+        res.json({ success: true, message: `¡Se ha restaurado la base de datos de respaldo local gtr_pos.db.bak (${restoredCount} registros) con éxito y se ha sincronizado con Firestore!` });
       } else {
         res.status(404).json({ error: "No se encontró ningún archivo de respaldo automático (gtr_pos.db.bak) en el servidor." });
       }

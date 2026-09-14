@@ -8,7 +8,7 @@ import {
     AlertTriangle, CreditCard, DollarSign, Camera, X, ClipboardCheck,
     Coins, HelpCircle, ChevronRight, ChevronDown, ShoppingBag, Grid, List, LayoutGrid,
     CheckCircle2, ArrowLeftRight, QrCode, History, Eye, Star, FileText, Sparkles, Download, Check, Clock, Truck, Lock, Loader2,
-    RotateCcw, ShieldAlert
+    RotateCcw, ShieldAlert, Maximize2, Package
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
@@ -2709,19 +2709,21 @@ export default function POS() {
                     </div>
 
                     {/* Search & Categories bar */}
-                    <div className="flex flex-col xl:flex-row gap-3 xl:gap-4 items-center justify-between bg-white dark:bg-[#0c111e] p-2.5 lg:p-3.5 rounded-2xl lg:rounded-3xl border border-slate-200/60 dark:border-slate-850 select-none shrink-0 shadow-xs">
-                        <div className="flex gap-2.5 w-full xl:w-5/12 items-center shrink-0">
-                            <POSSearchInput 
-                                initialValue={search} 
-                                onSearchChange={(val) => setSearch(val)} 
-                                onEnter={(val) => {
-                                    triggerVibrate(10);
-                                    setSearch(val);
-                                    setDebouncedSearch(val);
-                                    fetchProducts(val);
-                                }}
-                                isSearching={search !== debouncedSearch} 
-                            />
+                    <div className="flex flex-col 2xl:flex-row gap-2.5 2xl:gap-4 items-stretch 2xl:items-center justify-between bg-white dark:bg-[#0c111e] p-2.5 lg:p-3 rounded-2xl lg:rounded-3xl border border-slate-200/60 dark:border-slate-850 select-none shrink-0 shadow-xs">
+                        <div className="flex gap-2 w-full 2xl:w-5/12 items-center shrink-0 min-w-0">
+                            <div className="flex-1 min-w-0">
+                                <POSSearchInput 
+                                    initialValue={search} 
+                                    onSearchChange={(val) => setSearch(val)} 
+                                    onEnter={(val) => {
+                                        triggerVibrate(10);
+                                        setSearch(val);
+                                        setDebouncedSearch(val);
+                                        fetchProducts(val);
+                                    }}
+                                    isSearching={search !== debouncedSearch} 
+                                />
+                            </div>
                             <button 
                                 type="button"
                                 onClick={() => setIsScannerOpen(true)}
@@ -2733,16 +2735,16 @@ export default function POS() {
                             </button>
                         </div>
                         
-                        <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full xl:w-7/12 justify-between xl:justify-end overflow-hidden">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full 2xl:w-7/12 justify-between 2xl:justify-end min-w-0">
                             {/* Category selectors with active active oceanic blue styles */}
-                            <div className="flex gap-1 overflow-x-auto w-full sm:w-auto pb-0.5 max-w-lg scrollbar-none select-none">
+                            <div className="flex gap-1 overflow-x-auto w-full sm:w-auto pb-0.5 scrollbar-none select-none min-w-0 flex-1 sm:flex-initial">
                                 {categories.map(cat => (
                                     <motion.button
                                         whileHover={{ scale: 1.02 }}
                                         whileTap={{ scale: 0.98 }}
                                         key={cat}
                                         onClick={() => { triggerVibrate(15); setSelectedCategory(cat); }}
-                                        className={`px-2.5 py-1 rounded-xl text-[10px] font-black whitespace-nowrap relative transition-colors duration-200 cursor-pointer ${
+                                        className={`px-2.5 py-1 rounded-xl text-[10px] font-black whitespace-nowrap relative transition-colors duration-200 cursor-pointer shrink-0 ${
                                             selectedCategory === cat 
                                                 ? 'text-white shadow-md font-extrabold' 
                                                 : 'bg-slate-55 dark:bg-[#070b13] border border-slate-100 dark:border-slate-850/60 text-slate-500 dark:text-slate-400 hover:bg-slate-100/80'
@@ -2761,7 +2763,7 @@ export default function POS() {
                             </div>
 
                             {/* Density & Layout mode toggle for displaying more products */}
-                            <div className="flex items-center gap-0.5 bg-slate-50 dark:bg-[#070b13] p-0.5 rounded-xl border border-slate-250/20 dark:border-slate-850/60 shrink-0 w-full sm:w-auto justify-around sm:justify-start">
+                            <div className="flex items-center gap-0.5 bg-slate-50 dark:bg-[#070b13] p-0.5 rounded-xl border border-slate-250/20 dark:border-slate-850/60 shrink-0 justify-around sm:justify-start">
                                 <button
                                     type="button"
                                     onClick={() => handleLayoutModeChange('grid')}
@@ -2852,9 +2854,9 @@ export default function POS() {
                         filtered.length === 0
                             ? "hidden"
                             : viewLayoutMode === 'grid' 
-                            ? "grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4" 
+                            ? "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3 sm:gap-4 auto-rows-fr" 
                             : viewLayoutMode === 'compact-grid'
-                            ? "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2"
+                            ? "grid grid-cols-[repeat(auto-fill,minmax(145px,1fr))] gap-2 sm:gap-2.5 auto-rows-fr"
                             : "flex flex-col gap-1.5"
                     }
                 >
@@ -2863,7 +2865,6 @@ export default function POS() {
                             const lowStock = p.stock <= p.stock_alarm;
                             const itemInCart = cart.find(c => c.id === p.id);
                             const qtyInCart = itemInCart ? itemInCart.cartQuantity : 0;
-                            const isImageExpanded = !!expandedImages[p.id];
 
                             if (viewLayoutMode === 'list') {
                                 return (
@@ -2872,7 +2873,7 @@ export default function POS() {
                                         initial={{ opacity: 0, y: 5 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         exit={{ opacity: 0, y: 5 }}
-                                        whileHover={{ scale: 1.01, x: 2, boxShadow: "0 4px 12px rgba(0,0,0,0.02)" }}
+                                        whileHover={{ scale: 1.008, x: 2, boxShadow: "0 4px 12px rgba(0,0,0,0.02)" }}
                                         whileTap={{ scale: 0.99 }}
                                         transition={{ type: "spring", stiffness: 400, damping: 28 }}
                                         id={`product-row-${p.id}`}
@@ -2959,7 +2960,7 @@ export default function POS() {
                                                     onClick={() => addToCart(p, 1)}
                                                     className={`w-11 h-11 sm:w-6 sm:h-6 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 rounded-lg text-sm sm:text-xs font-black flex items-center justify-center transition border cursor-pointer select-none ${
                                                         qtyInCart > 0 
-                                                            ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500 shadow-xs' 
+                                                             ? 'bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500 shadow-xs' 
                                                             : 'bg-white dark:bg-[#111625] border-slate-200/50 dark:border-slate-805 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-405'
                                                     }`}
                                                     title="Sumar cantidad al carrito"
@@ -2979,46 +2980,48 @@ export default function POS() {
                                         initial={{ opacity: 0, scale: 0.95 }}
                                         animate={{ opacity: 1, scale: 1 }}
                                         exit={{ opacity: 0, scale: 0.95 }}
-                                        whileHover={{ scale: 1.03, y: -1.5, boxShadow: "0 8px 16px -4px rgba(0,0,0,0.04)" }}
-                                        whileTap={{ scale: 0.965 }}
-                                        transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                                        whileHover={{ y: -2, boxShadow: "0 8px 20px -4px rgba(0,0,0,0.06)" }}
+                                        whileTap={{ scale: 0.97 }}
+                                        transition={{ type: "spring", stiffness: 400, damping: 28 }}
                                         id={`product-card-compact-${p.id}`}
                                         key={p.id}
                                         onClick={() => addToCart(p, 1)}
-                                        className={`group bg-white dark:bg-[#0c111e] rounded-2xl p-2.5 shadow-sm border border-slate-150 dark:border-slate-850 flex flex-col justify-between cursor-pointer select-none min-h-[110px]`}
+                                        className={`group bg-white dark:bg-[#0c111e] rounded-2xl p-2.5 border transition-all duration-150 flex flex-col justify-between cursor-pointer select-none h-full ${
+                                            qtyInCart > 0 
+                                                ? 'border-indigo-500/70 shadow-xs ring-1 ring-indigo-500/20' 
+                                                : 'border-slate-200/70 dark:border-slate-850 hover:border-slate-300 dark:hover:border-slate-750 shadow-2xs'
+                                        }`}
                                     >
                                         <div>
                                             {/* Compact Header: Index code & Cart quant indicator */}
-                                            <div className="flex justify-between items-center text-[8.5px]">
-                                                <span className="font-bold text-slate-405 font-mono">#{p.id}</span>
+                                            <div className="flex justify-between items-center text-[8.5px] mb-1.5">
+                                                <div className="flex items-center gap-1 min-w-0">
+                                                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${qtyInCart > 0 ? "bg-indigo-600 animate-pulse" : "bg-neutral-300 dark:bg-neutral-700"}`}></span>
+                                                    <span className="font-bold text-slate-400 font-mono truncate">#{p.id}</span>
+                                                </div>
                                                 {qtyInCart > 0 ? (
-                                                    <span className="font-extrabold text-indigo-600 bg-indigo-50/70 dark:text-indigo-400 dark:bg-indigo-950/40 px-1.5 py-0.5 rounded-md">
+                                                    <span className="font-black text-indigo-600 bg-indigo-50 dark:text-indigo-400 dark:bg-indigo-950/60 px-1.5 py-0.2 rounded-full text-[8.5px] whitespace-nowrap">
                                                         {qtyInCart} u
                                                     </span>
                                                 ) : lowStock ? (
-                                                    <span className="text-[7.5px] font-black text-rose-500 bg-rose-500/10 px-1 py-0.5 rounded">
+                                                    <span className="text-[7.5px] font-black text-rose-500 bg-rose-500/10 px-1.5 py-0.2 rounded whitespace-nowrap">
                                                         MÍN
                                                     </span>
-                                                ) : null}
+                                                ) : (
+                                                    <span className="font-mono text-[8px] text-slate-400 whitespace-nowrap">{p.stock} u</span>
+                                                )}
                                             </div>
 
-                                            {/* Medium Row body */}
-                                            <div className="flex gap-2 items-start mt-1.5 min-w-0">
-                                                <div className="flex-1 min-w-0">
-                                                    <h3 className="font-extrabold text-[10.5px] text-slate-800 dark:text-gray-150 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 leading-snug line-clamp-2" title={p.name}>
-                                                        {p.name}
-                                                    </h3>
-                                                    <p className="text-[8px] font-mono text-slate-400 dark:text-slate-500 mt-0.5 truncate">SKU: {p.sku || 'N/A'}</p>
-                                                </div>
-                                                
-                                                {p.image && (
+                                            {/* Body */}
+                                            <div className="flex gap-2 items-start min-w-0">
+                                                {p.image ? (
                                                     <div 
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             setSideDetailProduct(p);
                                                         }}
-                                                        className="w-8 h-8 rounded-lg overflow-hidden border border-slate-150 dark:border-slate-800 bg-slate-50 shrink-0 relative hover:scale-105 transition duration-155 cursor-zoom-in"
-                                                        title="Ver foto del producto"
+                                                        className="w-10 h-10 rounded-lg overflow-hidden border border-slate-200/60 dark:border-slate-800 bg-slate-50 shrink-0 relative hover:scale-105 transition duration-150 cursor-zoom-in shadow-2xs"
+                                                        title="Ver foto ampliada"
                                                     >
                                                         <img 
                                                             src={p.image} 
@@ -3027,19 +3030,64 @@ export default function POS() {
                                                             referrerPolicy="no-referrer" 
                                                         />
                                                     </div>
+                                                ) : (
+                                                    <div className="w-10 h-10 rounded-lg border border-slate-100 dark:border-slate-850 bg-slate-50 dark:bg-slate-900/40 shrink-0 flex items-center justify-center text-slate-300 dark:text-slate-700">
+                                                        <Package size={14} />
+                                                    </div>
                                                 )}
+                                                <div className="flex-1 min-w-0">
+                                                    <h3 className="font-extrabold text-[11px] text-slate-800 dark:text-gray-150 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 leading-snug line-clamp-2 h-7" title={p.name}>
+                                                        {p.name}
+                                                    </h3>
+                                                    <p className="text-[8px] font-mono text-slate-400 dark:text-slate-500 mt-0.5 truncate">SKU: {p.sku || 'N/A'}</p>
+                                                </div>
                                             </div>
                                         </div>
 
                                         {/* Bottom prices section */}
-                                        <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-850/50 flex items-center justify-between text-[10px]">
-                                            <span className={`font-mono text-[9px] ${lowStock ? "text-rose-500 font-bold" : "text-slate-450"}`}>
-                                                {p.stock} u
-                                            </span>
-                                            <div className="text-right">
-                                                <span className="font-extrabold text-indigo-600 dark:text-indigo-400 font-mono text-[11px]">
-                                                    Bs. {roundBs(p.price_unit * exchangeRate).toFixed(1)}
+                                        <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-850/50 flex items-center justify-between text-[10px] gap-1">
+                                            <div className="flex flex-col min-w-0">
+                                                <span className="font-extrabold text-indigo-600 dark:text-indigo-400 font-mono text-[11.5px] leading-tight whitespace-nowrap">
+                                                    Bs. {roundBs((Number(p.price_unit) || 0) * exchangeRate).toFixed(2)}
                                                 </span>
+                                                <span className="text-[7.5px] font-mono text-slate-400 dark:text-slate-500 whitespace-nowrap">
+                                                    ${(Number(p.price_unit) || 0).toFixed(2)}
+                                                </span>
+                                            </div>
+                                            
+                                            <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                                                {qtyInCart > 0 ? (
+                                                    <div className="flex items-center gap-0.5 bg-indigo-50 dark:bg-indigo-950/40 p-0.5 rounded-lg border border-indigo-200/50 dark:border-indigo-800/40">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => updateCartItemQuantity(p.id, Math.max(0, qtyInCart - 1))}
+                                                            className="w-5 h-5 rounded bg-white dark:bg-[#0c111e] hover:text-rose-500 text-slate-600 dark:text-slate-300 flex items-center justify-center text-[10px] font-bold shadow-2xs"
+                                                            title="Restar"
+                                                        >
+                                                            -
+                                                        </button>
+                                                        <span className="text-[9px] font-mono font-bold text-indigo-600 dark:text-indigo-400 px-1 text-center min-w-[16px]">
+                                                            {qtyInCart}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => addToCart(p, 1)}
+                                                            className="w-5 h-5 rounded bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center text-[10px] font-bold shadow-2xs"
+                                                            title="Sumar"
+                                                        >
+                                                            +
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addToCart(p, 1)}
+                                                        className="w-6 h-6 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-600 text-slate-600 hover:text-white dark:text-slate-300 dark:hover:text-white flex items-center justify-center text-xs font-bold transition shadow-2xs"
+                                                        title="Añadir al carrito"
+                                                    >
+                                                        <Plus size={10} />
+                                                    </button>
+                                                )}
                                             </div>
                                         </div>
                                     </motion.div>
@@ -3050,51 +3098,55 @@ export default function POS() {
                             return (
                                 <motion.div 
                                     layout
-                                    initial={{ opacity: 0, scale: 0.94 }}
+                                    initial={{ opacity: 0, scale: 0.95 }}
                                     animate={{ opacity: 1, scale: 1 }}
-                                    exit={{ opacity: 0, scale: 0.94 }}
-                                    whileHover={{ scale: 1.025, y: -2, boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05)" }}
-                                    whileTap={{ scale: 0.965 }}
-                                    transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                                    exit={{ opacity: 0, scale: 0.95 }}
+                                    whileHover={{ y: -2, boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.06), 0 8px 10px -6px rgba(0, 0, 0, 0.04)" }}
+                                    whileTap={{ scale: 0.98 }}
+                                    transition={{ type: "spring", stiffness: 400, damping: 28 }}
                                     id={`product-card-${p.id}`}
                                     key={p.id}
                                     onClick={() => addToCart(p, 1)}
-                                    className={`group bg-white dark:bg-[#0c111e] rounded-3xl p-4 shadow-sm border border-slate-150 dark:border-slate-850 flex flex-col justify-between cursor-pointer select-none min-h-[155px] ${isImageExpanded ? 'row-span-2' : ''}`}
+                                    className={`group bg-white dark:bg-[#0c111e] rounded-2xl p-3 sm:p-3.5 border transition-all duration-200 flex flex-col justify-between cursor-pointer select-none h-full ${
+                                        qtyInCart > 0 
+                                            ? 'border-indigo-500/70 shadow-sm ring-1 ring-indigo-500/20' 
+                                            : 'border-slate-200/80 dark:border-slate-850 hover:border-slate-300 dark:hover:border-slate-700 shadow-xs'
+                                    }`}
                                 >
                                     <div>
-                                        <div className="flex justify-between items-center">
-                                            <div className="flex items-center gap-1.5">
-                                                <span className={`w-2 h-2 rounded-full ${qtyInCart > 0 ? "bg-indigo-600" : "bg-neutral-300 dark:bg-neutral-700"}`}></span>
-                                                <span className="text-[10px] font-bold text-slate-400 font-mono">#{p.id}</span>
+                                        {/* Top Meta: ID + In-Cart / Stock alert */}
+                                        <div className="flex items-center justify-between gap-1.5 mb-2.5">
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                                <span className={`w-2 h-2 rounded-full shrink-0 ${qtyInCart > 0 ? "bg-indigo-600 animate-pulse" : "bg-neutral-300 dark:bg-neutral-700"}`}></span>
+                                                <span className="text-[10px] font-mono font-bold text-slate-400 dark:text-slate-500 truncate">#{p.id}</span>
                                             </div>
-                                            {qtyInCart > 0 ? (
-                                                <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 dark:text-indigo-400 dark:bg-indigo-950/40 px-2.5 py-0.5 rounded-full">
-                                                    {qtyInCart} en carrito
-                                                </span>
-                                            ) : lowStock ? (
-                                                <span className="text-[8px] font-black text-rose-500 bg-rose-500/10 px-2 py-0.5 rounded-lg flex items-center gap-0.5 border border-rose-500/10">
-                                                    ALERTA
-                                                </span>
-                                            ) : null}
+                                            <div className="flex items-center gap-1 shrink-0">
+                                                {qtyInCart > 0 ? (
+                                                    <span className="text-[9.5px] font-black text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                                        {qtyInCart} en carrito
+                                                    </span>
+                                                ) : lowStock ? (
+                                                    <span className="text-[8.5px] font-black text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 px-2 py-0.5 rounded-full whitespace-nowrap">
+                                                        ⚠️ MÍNIMO
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-[9.5px] font-mono font-bold text-slate-400 dark:text-slate-500">
+                                                        {p.stock} u
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
 
-                                        {/* Horizontal Title & Image Thumbnail container */}
-                                        <div className="flex gap-3 items-start mt-3">
-                                            <div className="flex-1 min-w-0">
-                                                <h3 className="font-extrabold text-xs text-slate-800 dark:text-gray-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-455 transition-colors leading-snug line-clamp-2">
-                                                    {p.name}
-                                                </h3>
-                                                <p className="text-[9.5px] font-mono text-slate-400 dark:text-slate-500 mt-1 truncate">SKU: {p.sku || 'N/A'}</p>
-                                            </div>
-                                            
-                                            {p.image && (
+                                        {/* Thumbnail & Title/SKU */}
+                                        <div className="flex gap-2.5 items-start">
+                                            {p.image ? (
                                                 <div 
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         setSideDetailProduct(p);
                                                     }}
-                                                    className="w-11 h-11 rounded-xl overflow-hidden border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-black/20 shrink-0 relative group/img cursor-zoom-in"
-                                                    title="Ver pantalla completa"
+                                                    className="w-13 h-13 rounded-xl overflow-hidden border border-slate-200/60 dark:border-slate-800 bg-slate-50 dark:bg-black/30 shrink-0 relative group/img cursor-zoom-in shadow-2xs"
+                                                    title="Ampliar foto completa"
                                                 >
                                                     <img 
                                                         src={p.image} 
@@ -3102,86 +3154,80 @@ export default function POS() {
                                                         alt={p.name} 
                                                         referrerPolicy="no-referrer" 
                                                     />
+                                                    <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/30 transition-colors flex items-center justify-center">
+                                                        <Maximize2 size={11} className="text-white opacity-0 group-hover/img:opacity-100 transition-opacity drop-shadow" />
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="w-13 h-13 rounded-xl border border-slate-100 dark:border-slate-850 bg-slate-50 dark:bg-slate-900/40 shrink-0 flex items-center justify-center text-slate-300 dark:text-slate-700">
+                                                    <Package size={18} />
                                                 </div>
                                             )}
-                                        </div>
-                                        
-                                        {p.image && (
-                                            <div className="flex items-center gap-1 mt-2.5">
-                                                {/* Downward deployment toggle */}
-                                                <button
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setExpandedImages(prev => ({ ...prev, [p.id]: !prev[p.id] }));
-                                                    }}
-                                                    className={`p-1 px-2 rounded-lg border text-[9px] font-bold flex items-center gap-1 transition-all ${
-                                                        isImageExpanded 
-                                                            ? 'bg-blue-50 border-blue-200 text-blue-600 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-400 shadow-xs' 
-                                                            : 'bg-slate-50 border-slate-205 text-slate-505 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                                                    }`}
-                                                    title="Desplegar foto abajo"
-                                                >
-                                                    <span>Detalle foto</span>
-                                                    <ChevronDown size={10} className={`transition-transform duration-200 ${isImageExpanded ? 'rotate-180 text-blue-500' : ''}`} />
-                                                </button>
 
-                                                {/* Side deployment toggle */}
-                                                <button
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setSideDetailProduct(p);
-                                                    }}
-                                                    className="p-1 px-1.5 bg-slate-50 hover:bg-slate-100 dark:bg-slate-900 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 rounded-lg text-[9px] font-bold flex items-center gap-0.5 transition"
-                                                    title="Ver foto al costado lateral"
-                                                >
-                                                    <span>Pantalla Completa</span>
-                                                    <ChevronRight size={10} />
-                                                </button>
+                                            <div className="flex-1 min-w-0">
+                                                <h3 className="font-extrabold text-[12px] text-slate-850 dark:text-gray-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors leading-snug line-clamp-2 h-8" title={p.name}>
+                                                    {p.name}
+                                                </h3>
+                                                <div className="flex items-center gap-1.5 mt-1">
+                                                    <span className="text-[9px] font-mono text-slate-400 dark:text-slate-500 truncate">SKU: {p.sku || 'N/A'}</span>
+                                                    {p.category && (
+                                                        <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-850 px-1.5 py-0.2 rounded truncate max-w-[75px]">
+                                                            {p.category}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
-                                        )}
-                                        
-                                        {/* Downward deployed photo compartment */}
-                                        {p.image && isImageExpanded && (
-                                            <div className="mt-2.5 overflow-hidden rounded-2xl border border-slate-100 dark:border-slate-850 bg-slate-50 dark:bg-black/35 w-full h-28 flex items-center justify-center relative group/img animate-in slide-in-from-top-1 duration-200">
-                                                <img 
-                                                    src={p.image} 
-                                                    className="w-full h-full object-cover transition duration-300 group-hover/img:scale-105" 
-                                                    alt={p.name} 
-                                                    referrerPolicy="no-referrer" 
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setSideDetailProduct(p);
-                                                    }}
-                                                    className="absolute bottom-1.5 right-1.5 bg-black/60 hover:bg-black/85 text-white rounded-lg p-1 text-[8.5px] font-bold flex items-center gap-0.5 shadow-md backdrop-blur-sm transition cursor-pointer"
-                                                >
-                                                    <span>Ampliar</span>
-                                                    <ChevronRight size={9} />
-                                                </button>
-                                            </div>
-                                        )}
+                                        </div>
                                     </div>
-                                    <div className="mt-4 pt-3.5 border-t border-slate-50 dark:border-slate-850/60 flex flex-col gap-2.5 md:flex-row md:items-end md:justify-between md:gap-0">
-                                        <div className="flex items-center justify-between md:flex-col md:items-start gap-1">
-                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Existencias</span>
-                                            <span className={`text-[11px] font-mono font-extrabold ${lowStock ? "text-rose-500" : "text-slate-700 dark:text-slate-300"}`}>
-                                                {p.stock} u
+
+                                    {/* Bottom: Pricing + Quick Stepper/Add Button */}
+                                    <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-850/70 flex items-center justify-between gap-2">
+                                        <div className="flex flex-col min-w-0">
+                                            <div className="flex items-baseline gap-0.5">
+                                                <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 font-mono">Bs.</span>
+                                                <span className="text-sm font-black text-indigo-600 dark:text-indigo-400 font-mono tracking-tight leading-none whitespace-nowrap">
+                                                    {roundBs((Number(p.price_unit) || 0) * exchangeRate).toFixed(2)}
+                                                </span>
+                                            </div>
+                                            <span className="text-[9px] font-mono text-slate-400 dark:text-slate-500 mt-0.5 whitespace-nowrap">
+                                                ${(Number(p.price_unit) || 0).toFixed(2)} USD
                                             </span>
                                         </div>
-                                        <div className="flex items-center justify-between md:flex-col md:items-end gap-1">
-                                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest md:hidden">Precio</span>
-                                            <div className="flex flex-col items-end">
-                                                <span className="text-xs md:text-sm font-black text-indigo-600 dark:text-indigo-400 font-mono tracking-tight leading-none whitespace-nowrap">
-                                                    Bs. {roundBs((Number(p.price_unit) || 0) * exchangeRate).toFixed(2)}
-                                                </span>
-                                                <span className="text-[9px] font-mono font-bold text-slate-400 dark:text-slate-500 mt-1 whitespace-nowrap">
-                                                    ${(Number(p.price_unit) || 0).toFixed(2)} USD
-                                                </span>
-                                            </div>
+
+                                        <div className="flex items-center shrink-0" onClick={(e) => e.stopPropagation()}>
+                                            {qtyInCart > 0 ? (
+                                                <div className="flex items-center gap-0.5 bg-indigo-50 dark:bg-indigo-950/40 p-0.5 rounded-xl border border-indigo-200/60 dark:border-indigo-800/40 shadow-xs">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => updateCartItemQuantity(p.id, Math.max(0, qtyInCart - 1))}
+                                                        className="w-6 h-6 rounded-lg bg-white dark:bg-[#0c111e] hover:bg-rose-50 dark:hover:bg-rose-950/30 text-slate-600 dark:text-slate-350 hover:text-rose-600 dark:hover:text-rose-400 flex items-center justify-center transition cursor-pointer text-xs font-black shadow-2xs"
+                                                        title="Restar una unidad"
+                                                    >
+                                                        -
+                                                    </button>
+                                                    <span className="text-xs font-mono font-black text-indigo-600 dark:text-indigo-400 px-1.5 text-center min-w-[20px]">
+                                                        {qtyInCart}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addToCart(p, 1)}
+                                                        className="w-6 h-6 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center transition cursor-pointer text-xs font-black shadow-2xs"
+                                                        title="Añadir otra unidad"
+                                                    >
+                                                        +
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => addToCart(p, 1)}
+                                                    className="px-2.5 py-1.5 bg-slate-100 hover:bg-indigo-600 text-slate-700 hover:text-white dark:bg-slate-800 dark:hover:bg-indigo-600 dark:text-slate-300 dark:hover:text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all duration-150 flex items-center gap-1 cursor-pointer group-hover:bg-indigo-600 group-hover:text-white shadow-2xs"
+                                                    title="Añadir al carrito"
+                                                >
+                                                    <Plus size={11} />
+                                                    <span>Añadir</span>
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 </motion.div>
@@ -3235,7 +3281,7 @@ export default function POS() {
         </div>
 
             {/* Desktop persistent Sidebar checkouts pane */}
-            <div className="hidden lg:flex w-[410px] bg-white dark:bg-[#0a0f1b] border-l border-slate-200/60 dark:border-slate-850 flex-col shrink-0">
+            <div className="hidden lg:flex w-[330px] xl:w-[370px] 2xl:w-[410px] bg-white dark:bg-[#0a0f1b] border-l border-slate-200/60 dark:border-slate-850 flex-col shrink-0">
                 {renderCartPane(false)}
             </div>
 

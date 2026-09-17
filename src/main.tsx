@@ -78,6 +78,33 @@ try {
         url = (input as any).url;
       }
       if (!url.startsWith('http') || url.startsWith(window.location.origin)) {
+        init = init || {};
+        const headersObj: Record<string, string> = {};
+        if (init.headers) {
+          if (typeof (init.headers as any).forEach === 'function') {
+            (init.headers as any).forEach((value: string, key: string) => {
+              headersObj[key.toLowerCase()] = value;
+            });
+          } else if (Array.isArray(init.headers)) {
+            init.headers.forEach(([key, value]) => {
+              headersObj[key.toLowerCase()] = value;
+            });
+          } else if (typeof init.headers === 'object') {
+            Object.keys(init.headers).forEach(key => {
+              headersObj[key.toLowerCase()] = (init.headers as any)[key];
+            });
+          }
+        }
+
+        // Attach Authorization token if available
+        const token = localStorage.getItem('auth_token');
+        if (token && token.trim() && (!headersObj['authorization'] || headersObj['authorization'] === 'Bearer ' || headersObj['authorization'] === 'Bearer undefined')) {
+          headersObj['authorization'] = `Bearer ${token.trim()}`;
+        } else if (!token && (headersObj['authorization'] === 'Bearer ' || headersObj['authorization'] === 'Bearer undefined')) {
+          delete headersObj['authorization'];
+        }
+
+        // Attach user identification headers if available
         const userJson = localStorage.getItem('user');
         if (userJson) {
           try {
@@ -87,23 +114,6 @@ try {
             }
             const user = cachedUserObj;
             if (user) {
-              init = init || {};
-              const headersObj: Record<string, string> = {};
-              if (init.headers) {
-                if (typeof (init.headers as any).forEach === 'function') {
-                  (init.headers as any).forEach((value: string, key: string) => {
-                    headersObj[key.toLowerCase()] = value;
-                  });
-                } else if (Array.isArray(init.headers)) {
-                  init.headers.forEach(([key, value]) => {
-                    headersObj[key.toLowerCase()] = value;
-                  });
-                } else if (typeof init.headers === 'object') {
-                  Object.keys(init.headers).forEach(key => {
-                    headersObj[key.toLowerCase()] = (init.headers as any)[key];
-                  });
-                }
-              }
               if (!headersObj['x-user-id'] && user.id) {
                 headersObj['x-user-id'] = String(user.id);
               }
@@ -113,19 +123,18 @@ try {
               if (!headersObj['x-user-username'] && user.username) {
                 headersObj['x-user-username'] = String(user.username);
               }
+              if (!headersObj['x-user-name'] && user.username) {
+                headersObj['x-user-name'] = String(user.username);
+              }
               if (!headersObj['x-user-permissions'] && user.permissions) {
                 headersObj['x-user-permissions'] = JSON.stringify(user.permissions);
               }
-              const token = localStorage.getItem('auth_token');
-              if (token && !headersObj['authorization']) {
-                headersObj['authorization'] = `Bearer ${token}`;
-              }
-              init.headers = headersObj;
             }
           } catch (err) {
             console.error("Error parsing user in fetch patch", err);
           }
         }
+        init.headers = headersObj;
       }
       return originalFetch(input, init).then(res => {
         if (res.status === 401 && !url.includes('/auth/login')) {

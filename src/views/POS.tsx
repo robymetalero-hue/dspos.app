@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppContext } from '../context/AppContext';
 import { hasPermission } from '../utils/permissions';
+import type { Product } from '../types';
 import { 
     ShoppingCart, Plus, Minus, Trash2, Printer, Search, UserCheck, 
     AlertTriangle, CreditCard, DollarSign, Camera, X, ClipboardCheck,
@@ -39,10 +40,29 @@ const triggerVibrate = (pattern: number | number[] = 40) => {
 };
 
 
-// --- Optimized Search Input ---
-const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSearching }: { onSearchChange: (val: string) => void, onEnter: (val: string) => void, initialValue: string, isSearching: boolean }) => {
+// --- Optimized Search Input with Live Suggestions ---
+const POSSearchInput = React.memo(({ 
+    onSearchChange, 
+    onEnter, 
+    initialValue, 
+    isSearching,
+    suggestions = [],
+    onSelectSuggestion,
+    exchangeRate = 6.96
+}: { 
+    onSearchChange: (val: string) => void, 
+    onEnter: (val: string) => void, 
+    initialValue: string, 
+    isSearching: boolean,
+    suggestions?: Product[],
+    onSelectSuggestion?: (prod: Product) => void,
+    exchangeRate?: number
+}) => {
     const [localVal, setLocalVal] = useState(initialValue);
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [highlightedIndex, setHighlightedIndex] = useState(-1);
     const inputRef = useRef<HTMLInputElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
 
     // Sync with external clear (when initialValue becomes empty)
     useEffect(() => {
@@ -51,6 +71,16 @@ const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSe
             if (inputRef.current) inputRef.current.value = "";
         }
     }, [initialValue]);
+
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+                setShowSuggestions(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     useEffect(() => {
         const handleSync = (e: any) => {
@@ -68,11 +98,14 @@ const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSe
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = e.target.value;
         setLocalVal(val);
+        setHighlightedIndex(-1);
+        setShowSuggestions(val.trim().length > 0);
         onSearchChange(val);
     };
 
     const handleClear = () => {
         setLocalVal("");
+        setShowSuggestions(false);
         onSearchChange("");
         if (inputRef.current) {
             inputRef.current.value = "";
@@ -80,9 +113,41 @@ const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSe
         }
     };
 
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (showSuggestions && suggestions.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setHighlightedIndex(prev => (prev + 1) % suggestions.length);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHighlightedIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                setShowSuggestions(false);
+                return;
+            }
+            if (e.key === 'Enter' && highlightedIndex >= 0 && suggestions[highlightedIndex]) {
+                e.preventDefault();
+                if (onSelectSuggestion) {
+                    onSelectSuggestion(suggestions[highlightedIndex]);
+                }
+                setShowSuggestions(false);
+                return;
+            }
+        }
+        if (e.key === 'Enter') {
+            setShowSuggestions(false);
+            onEnter(localVal);
+        }
+    };
+
     return (
-        <div className="relative flex-1 w-full min-w-[200px] sm:min-w-[280px]">
-            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none">
+        <div ref={containerRef} className="relative flex-1 w-full min-w-[200px] sm:min-w-[280px]">
+            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none z-10">
                 {isSearching ? (
                     <Loader2 size={16} className="animate-spin text-indigo-500" />
                 ) : (
@@ -96,12 +161,11 @@ const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSe
                 placeholder="Buscar por artículo, SKU, #ID, marca o categoría..." 
                 className="pl-10 pr-9 py-2.5 w-full bg-slate-50 dark:bg-black/20 border border-slate-200 dark:border-slate-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:text-white text-xs sm:text-sm transition placeholder-slate-400 font-semibold shadow-inner"
                 value={localVal}
-                onChange={handleChange}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                        onEnter(localVal);
-                    }
+                onFocus={() => {
+                    if (localVal.trim().length > 0) setShowSuggestions(true);
                 }}
+                onChange={handleChange}
+                onKeyDown={handleKeyDown}
                 autoComplete="off"
                 spellCheck="false"
             />
@@ -109,10 +173,69 @@ const POSSearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSe
                 <button
                     type="button"
                     onClick={handleClear}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer z-10"
                 >
                     <X size={15} />
                 </button>
+            )}
+
+            {/* Live Autocomplete Suggestions Dropdown */}
+            {showSuggestions && localVal.trim().length > 0 && suggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-[#0e1424] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-50 overflow-hidden max-h-80 overflow-y-auto">
+                    <div className="px-3 py-1.5 bg-slate-100/80 dark:bg-slate-850/80 border-b border-slate-200/50 dark:border-slate-800 flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">
+                        <span>Sugerencias ({Math.min(suggestions.length, 8)})</span>
+                        <span className="text-[9px] lowercase text-slate-400 font-normal">Click o Enter para agregar</span>
+                    </div>
+                    {suggestions.slice(0, 8).map((prod, idx) => {
+                        const priceBs = (prod.price_unit * (exchangeRate || 6.96)).toFixed(2);
+                        const isHighlighted = idx === highlightedIndex;
+                        return (
+                            <div 
+                                key={prod.id}
+                                onMouseEnter={() => setHighlightedIndex(idx)}
+                                onClick={() => {
+                                    if (onSelectSuggestion) onSelectSuggestion(prod);
+                                    setShowSuggestions(false);
+                                }}
+                                className={`px-3 py-2 flex items-center justify-between cursor-pointer border-b border-slate-100 dark:border-slate-850/60 last:border-0 transition-colors ${
+                                    isHighlighted ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                                }`}
+                            >
+                                <div className="min-w-0 flex-1 pr-3">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate">
+                                            {prod.name}
+                                        </span>
+                                        {prod.category && (
+                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-150 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase shrink-0">
+                                                {prod.category}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-3 mt-0.5 text-[11px] text-slate-400">
+                                        {prod.sku && <span>SKU: {prod.sku}</span>}
+                                        <span className={prod.stock > 0 ? "text-emerald-500 font-semibold" : "text-rose-500 font-bold"}>
+                                            Stock: {prod.stock}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="text-right shrink-0 flex items-center gap-2">
+                                    <div>
+                                        <div className="font-mono font-bold text-xs text-blue-600 dark:text-blue-400">
+                                            Bs. {priceBs}
+                                        </div>
+                                        <div className="text-[10px] text-slate-400 font-mono">
+                                            ${prod.price_unit.toFixed(2)} USD
+                                        </div>
+                                    </div>
+                                    <span className="hidden sm:inline-block px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-[10px] font-bold shadow-xs">
+                                        + Agregar
+                                    </span>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
             )}
         </div>
     );
@@ -2722,6 +2845,12 @@ export default function POS() {
                                         fetchProducts(val);
                                     }}
                                     isSearching={search !== debouncedSearch} 
+                                    suggestions={filtered}
+                                    onSelectSuggestion={(prod) => {
+                                        triggerVibrate(15);
+                                        addToCart(prod);
+                                    }}
+                                    exchangeRate={exchangeRate}
                                 />
                             </div>
                             <button 
@@ -4101,7 +4230,7 @@ export default function POS() {
                                                             {showClientSuggestions && clientName.trim().length > 0 && (
                                                                 <div className="absolute bottom-full left-0 right-0 z-50 mb-1 max-h-36 overflow-y-auto bg-white dark:bg-[#0c111e] border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl divide-y divide-slate-100 dark:divide-slate-850">
                                                                     {clients
-                                                                        .filter(c => c.name.toLowerCase().includes(clientName.toLowerCase()))
+                                                                        .filter(c => (c.name || '').toLowerCase().includes(clientName.toLowerCase()) || (c.phone || '').includes(clientName))
                                                                         .slice(0, 5)
                                                                         .map(c => (
                                                                             <div

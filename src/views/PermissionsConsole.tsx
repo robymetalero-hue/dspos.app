@@ -391,7 +391,7 @@ export default function PermissionsConsole() {
         const query = searchLogQuery.toLowerCase().trim();
         if (query) {
             const searchTerms = query.split(/\s+/);
-            const searchableText = `${log.admin_username} ${log.target_username} ${log.changes || ""}`.toLowerCase();
+            const searchableText = `${log.admin_username || ""} ${log.target_username || ""} ${log.changes || ""}`.toLowerCase();
             queryMatches = searchTerms.every(term => searchableText.includes(term));
         }
 

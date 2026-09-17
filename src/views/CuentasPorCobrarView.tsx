@@ -141,17 +141,30 @@ export default function CuentasPorCobrarView() {
         }
     };
 
-    const loadProducts = async () => {
+    const loadProducts = async (query?: string) => {
         try {
-            const res = await fetch('/api/products');
+            const url = query ? `/api/products?search=${encodeURIComponent(query)}` : '/api/products';
+            const res = await fetch(url);
             if (res.ok) {
                 const data = await res.json();
-                setProductList(data);
+                const items = Array.isArray(data) ? data : (Array.isArray(data?.products) ? data.products : []);
+                setProductList(items);
             }
         } catch (e) {
             console.error(e);
         }
     };
+
+    useEffect(() => {
+        if (!productSearchQuery.trim()) {
+            loadProducts();
+            return;
+        }
+        const timer = setTimeout(() => {
+            loadProducts(productSearchQuery.trim());
+        }, 200);
+        return () => clearTimeout(timer);
+    }, [productSearchQuery]);
 
     const loadPaymentHistory = async (debt: AccountReceivable) => {
         setLoadingHistory(true);

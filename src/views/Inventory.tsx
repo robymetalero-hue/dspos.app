@@ -13,10 +13,29 @@ import PhysicalCountManager from '../components/PhysicalCountManager';
 import { TableSkeleton, EmptyState } from '../components/UIStateFeedback';
 
 
-// --- Optimized Search Input ---
-const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue, isSearching }: { onSearchChange: (val: string) => void, onEnter: (val: string) => void, initialValue: string, isSearching: boolean }) => {
+// --- Optimized Search Input with Live Suggestions ---
+const InventorySearchInput = React.memo(({ 
+    onSearchChange, 
+    onEnter, 
+    initialValue, 
+    isSearching,
+    suggestions = [],
+    onSelectSuggestion,
+    exchangeRate = 6.96
+}: { 
+    onSearchChange: (val: string) => void, 
+    onEnter: (val: string) => void, 
+    initialValue: string, 
+    isSearching: boolean,
+    suggestions?: Product[],
+    onSelectSuggestion?: (prod: Product) => void,
+    exchangeRate?: number
+}) => {
     const [localVal, setLocalVal] = useState(initialValue);
+    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [highlightedIndex, setHighlightedIndex] = useState(-1);
     const inputRef = useRef<HTMLInputElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
 
     // Sync with external clear
     useEffect(() => {
@@ -25,6 +44,16 @@ const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue
             if (inputRef.current) inputRef.current.value = "";
         }
     }, [initialValue]);
+
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+                setShowSuggestions(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     useEffect(() => {
         const handleSync = (e: any) => {
@@ -42,11 +71,14 @@ const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = e.target.value;
         setLocalVal(val);
+        setHighlightedIndex(-1);
+        setShowSuggestions(val.trim().length > 0);
         onSearchChange(val);
     };
 
     const handleClear = () => {
         setLocalVal("");
+        setShowSuggestions(false);
         onSearchChange("");
         if (inputRef.current) {
             inputRef.current.value = "";
@@ -54,9 +86,41 @@ const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue
         }
     };
 
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (showSuggestions && suggestions.length > 0) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setHighlightedIndex(prev => (prev + 1) % suggestions.length);
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHighlightedIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                setShowSuggestions(false);
+                return;
+            }
+            if (e.key === 'Enter' && highlightedIndex >= 0 && suggestions[highlightedIndex]) {
+                e.preventDefault();
+                if (onSelectSuggestion) {
+                    onSelectSuggestion(suggestions[highlightedIndex]);
+                }
+                setShowSuggestions(false);
+                return;
+            }
+        }
+        if (e.key === 'Enter') {
+            setShowSuggestions(false);
+            onEnter(localVal);
+        }
+    };
+
     return (
-        <div className="relative w-full md:w-80 lg:w-96 flex-1 min-w-[240px] shrink-0">
-            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none">
+        <div ref={containerRef} className="relative w-full md:w-80 lg:w-96 flex-1 min-w-[240px] shrink-0">
+            <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 pointer-events-none z-10">
                 {isSearching ? (
                     <Loader2 size={16} className="animate-spin text-blue-500" />
                 ) : (
@@ -70,12 +134,11 @@ const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue
                 placeholder="Buscar por nombre, SKU, #ID, marca o categoría..." 
                 className="pl-10 pr-9 py-2.5 w-full bg-slate-50 dark:bg-black/15 border border-slate-200 dark:border-slate-850 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:text-white text-xs sm:text-sm transition placeholder-slate-400 font-semibold shadow-inner"
                 value={localVal}
-                onChange={handleChange}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                        onEnter(localVal);
-                    }
+                onFocus={() => {
+                    if (localVal.trim().length > 0) setShowSuggestions(true);
                 }}
+                onChange={handleChange}
+                onKeyDown={handleKeyDown}
                 autoComplete="off"
                 spellCheck="false"
             />
@@ -83,10 +146,64 @@ const InventorySearchInput = React.memo(({ onSearchChange, onEnter, initialValue
                 <button
                     type="button"
                     onClick={handleClear}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer z-10"
                 >
                     <X size={15} />
                 </button>
+            )}
+
+            {/* Suggestions Floating Dropdown */}
+            {showSuggestions && localVal.trim().length > 0 && suggestions.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-[#0e1424] border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-50 overflow-hidden max-h-80 overflow-y-auto">
+                    <div className="px-3 py-1.5 bg-slate-100/80 dark:bg-slate-850/80 border-b border-slate-200/50 dark:border-slate-800 flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">
+                        <span>Sugerencias ({Math.min(suggestions.length, 8)})</span>
+                        <span className="text-[9px] lowercase text-slate-400 font-normal">Click o Enter para seleccionar</span>
+                    </div>
+                    {suggestions.slice(0, 8).map((prod, idx) => {
+                        const priceBs = (prod.price_unit * (exchangeRate || 6.96)).toFixed(2);
+                        const isHighlighted = idx === highlightedIndex;
+                        return (
+                            <div 
+                                key={prod.id}
+                                onMouseEnter={() => setHighlightedIndex(idx)}
+                                onClick={() => {
+                                    if (onSelectSuggestion) onSelectSuggestion(prod);
+                                    setShowSuggestions(false);
+                                }}
+                                className={`px-3 py-2 flex items-center justify-between cursor-pointer border-b border-slate-100 dark:border-slate-850/60 last:border-0 transition-colors ${
+                                    isHighlighted ? 'bg-blue-50 dark:bg-blue-900/30' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                                }`}
+                            >
+                                <div className="min-w-0 flex-1 pr-3">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate">
+                                            {prod.name}
+                                        </span>
+                                        {prod.category && (
+                                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-150 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase shrink-0">
+                                                {prod.category}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center gap-3 mt-0.5 text-[11px] text-slate-400">
+                                        {prod.sku && <span>SKU: {prod.sku}</span>}
+                                        <span className={prod.stock > 0 ? "text-emerald-500 font-semibold" : "text-rose-500 font-bold"}>
+                                            Stock: {prod.stock}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="text-right shrink-0">
+                                    <div className="font-mono font-bold text-xs text-blue-600 dark:text-blue-400">
+                                        Bs. {priceBs}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-mono">
+                                        ${prod.price_unit.toFixed(2)} USD
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
             )}
         </div>
     );
@@ -1441,6 +1558,13 @@ export default function Inventory() {
                         fetchProducts(val);
                     }}
                     isSearching={searchQuery !== debouncedSearchQuery}
+                    suggestions={finalFilteredProducts}
+                    onSelectSuggestion={(prod) => {
+                        setSearchQuery(prod.name);
+                        setDebouncedSearchQuery(prod.name);
+                        fetchProducts(prod.name);
+                    }}
+                    exchangeRate={exchangeRate}
                 />
 
                 {/* Categories Scroll Area arranged like departments */}

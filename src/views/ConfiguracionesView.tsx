@@ -1,10 +1,10 @@
 import { backupDatabaseToDrive } from "../utils/driveBackup";
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { Settings, TrendingUp, History, ShieldAlert, Lock, Save, Cloud, Database, Download, Upload, FileJson, RefreshCw, DollarSign, Info, ShieldCheck, Receipt, Eye, Sliders, Type, RotateCcw, Printer, Users, Star, Trash2, Search, CloudUpload, CloudDownload, Activity, Smartphone, Sparkles, HardDrive, Archive } from 'lucide-react';
+import { Settings, TrendingUp, History, ShieldAlert, Lock, Save, Cloud, Database, Download, Upload, FileJson, RefreshCw, DollarSign, Info, ShieldCheck, Receipt, Eye, Sliders, Type, RotateCcw, Printer, Users, Star, Trash2, Search, CloudUpload, CloudDownload, Activity, Smartphone, Sparkles, HardDrive, Archive, X } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import RgbCustomizerPanel from '../components/RgbCustomizerPanel';
-import { saveOfflineAction, clearAllOfflineStorage } from '../utils/offlineStorage';
+import { saveOfflineAction, clearAllOfflineStorage, cacheAppState } from '../utils/offlineStorage';
 import { EmptyState, TableSkeleton } from '../components/UIStateFeedback';
 
 interface AuditLog {
@@ -342,20 +342,46 @@ export default function ConfiguracionesView() {
 
     const isAdmin = user?.role === 'admin';
 
+    const getAuthHeaders = (extra: Record<string, string> = {}) => {
+        const token = localStorage.getItem('auth_token');
+        const currentUser = user || (localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')!) : null);
+        const headers: Record<string, string> = {
+            'x-user-id': String(currentUser?.id || 4),
+            'x-user-username': currentUser?.username || 'admin',
+            'x-user-name': currentUser?.username || 'admin',
+            'x-user-role': currentUser?.role || 'admin',
+            ...extra
+        };
+        if (token && token.trim()) {
+            headers['Authorization'] = `Bearer ${token.trim()}`;
+        }
+        return headers;
+    };
+
+    const triggerBlobDownload = (blob: Blob, filename: string) => {
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            a.remove();
+            window.URL.revokeObjectURL(blobUrl);
+        }, 2000);
+    };
+
     const handleDownloadBackup = async () => {
         setIsBackingUp(true);
         try {
-            const token = localStorage.getItem('auth_token') || '';
+            showNotification?.("Generando y descargando copia de seguridad JSON...", "info");
             const res = await fetch('/api/backup', { 
-                headers: { 
-                    'Authorization': `Bearer ${token}`,
-                    'x-user-role': user?.role || 'admin',
-                    'x-user-name': user?.username || 'admin'
-                } 
+                headers: getAuthHeaders() 
             });
 
             if (!res.ok) {
-                let errMsg = "No se pudo obtener el archivo de respaldo";
+                let errMsg = "No se pudo generar la copia de seguridad";
                 try {
                     const errData = await res.json();
                     if (errData.error) errMsg += ": " + errData.error;
@@ -363,37 +389,17 @@ export default function ConfiguracionesView() {
                 throw new Error(errMsg);
             }
 
-            const data = await res.json();
-            const totalRecords = data.metadata?.totalRecords || 0;
-            const totalTables = data.metadata?.totalTables || 0;
-
-            // Generate clean downloadable JSON blob with explicit charset
-            const jsonString = JSON.stringify(data, null, 2);
-            const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8;' });
-            const url = window.URL.createObjectURL(blob);
-            
-            const a = document.createElement('a');
-            a.href = url;
+            const blob = await res.blob();
             const dateStr = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            a.download = `gtrpos_backup_${dateStr}.json`;
-            document.body.appendChild(a);
-            a.click();
-            
-            setTimeout(() => {
-                a.remove();
-                window.URL.revokeObjectURL(url);
-            }, 500);
+            const filename = `gtrpos_backup_${dateStr}.json`;
 
-            showNotification?.(`✓ Copia de seguridad exportada con éxito (${totalRecords} registros en ${totalTables} tablas).`, "success");
+            triggerBlobDownload(blob, filename);
+
+            const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
+            showNotification?.(`✓ Copia de seguridad exportada con éxito (${sizeMb} MB). Archivo ${filename} descargado.`, "success");
         } catch (err: any) {
             console.error("Backup download error:", err);
-            // Fallback to direct download URL if blob download is obstructed by iframe/PWA
-            try {
-                window.location.href = '/api/backup?download=true';
-                showNotification?.("Iniciando descarga directa de respaldo...", "info");
-            } catch (fallbackErr) {
-                showNotification?.("Error al descargar copia de seguridad: " + err.message, "error");
-            }
+            showNotification?.("Error al exportar copia de seguridad: " + err.message, "error");
         } finally {
             setIsBackingUp(false);
         }
@@ -424,49 +430,38 @@ export default function ConfiguracionesView() {
         setImportSuccess(false);
 
         try {
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                try {
-                    const text = e.target?.result as string;
-                    let parsed: any;
-                    try {
-                        parsed = JSON.parse(text);
-                    } catch (parseErr) {
-                        throw new Error("El archivo seleccionado no es un archivo JSON válido o está corrupto.");
-                    }
+            const text = await file.text();
+            let parsed: any;
+            try {
+                parsed = JSON.parse(text);
+            } catch (parseErr) {
+                throw new Error("El archivo seleccionado no es un archivo JSON válido o está corrupto.");
+            }
 
-                    // Validate via backend endpoint
-                    const valRes = await fetch('/api/backup/validate', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(parsed)
-                    });
+            // Validate via backend endpoint with auth headers
+            const valRes = await fetch('/api/backup/validate', {
+                method: 'POST',
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify(parsed)
+            });
 
-                    const valData = await valRes.json();
-                    if (!valRes.ok || !valData.valid) {
-                        throw new Error(valData.error || "Formato de archivo de respaldo no compatible.");
-                    }
+            const valData = await valRes.json();
+            if (!valRes.ok || !valData.valid) {
+                throw new Error(valData.error || "Formato de archivo de respaldo no compatible.");
+            }
 
-                    setRestoreValidationData({
-                        filePayload: parsed,
-                        validation: valData
-                    });
-                    setIsRestoreModalOpen(true);
-                } catch (err: any) {
-                    console.error("Validation error:", err);
-                    setImportError(err.message);
-                    showNotification?.("Error al validar archivo: " + err.message, "error");
-                } finally {
-                    setIsValidatingFile(false);
-                    event.target.value = ""; // Reset file input
-                }
-            };
-            reader.readAsText(file);
+            setRestoreValidationData({
+                filePayload: parsed,
+                validation: valData
+            });
+            setIsRestoreModalOpen(true);
         } catch (err: any) {
-            console.error(err);
+            console.error("Validation error:", err);
             setImportError(err.message);
+            showNotification?.("Error al validar archivo: " + err.message, "error");
+        } finally {
             setIsValidatingFile(false);
-            event.target.value = "";
+            if (event.target) event.target.value = ""; // Reset file input
         }
     };
 
@@ -479,11 +474,7 @@ export default function ConfiguracionesView() {
         try {
             const res = await fetch('/api/backup/import', {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-user-role': user?.role || 'admin',
-                    'x-user-name': user?.username || 'admin'
-                },
+                headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(restoreValidationData.filePayload)
             });
 
@@ -576,12 +567,8 @@ export default function ConfiguracionesView() {
     const fetchSnapshots = async () => {
         setIsLoadingSnapshots(true);
         try {
-            const token = localStorage.getItem('auth_token') || '';
             const res = await fetch('/api/backup/snapshots', {
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'x-user-role': user?.role || 'admin'
-                }
+                headers: getAuthHeaders()
             });
             if (res.ok) {
                 const data = await res.json();
@@ -601,13 +588,9 @@ export default function ConfiguracionesView() {
     const handleCreateSnapshot = async () => {
         setIsCreatingSnapshot(true);
         try {
-            const token = localStorage.getItem('auth_token') || '';
             const res = await fetch('/api/backup/create-snapshot', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'x-user-role': user?.role || 'admin'
-                }
+                headers: getAuthHeaders()
             });
             const data = await res.json();
             if (res.ok && data.success) {
@@ -627,13 +610,9 @@ export default function ConfiguracionesView() {
         if (!window.confirm(`⚠️ ¿Deseas RESTAURAR la instantánea "${filename}"? Tu base actual se respaldará automáticamente como copia de seguridad previa.`)) return;
         setIsRestoringSafety(true);
         try {
-            const token = localStorage.getItem('auth_token') || '';
             const res = await fetch(`/api/backup/restore-snapshot/${encodeURIComponent(filename)}`, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'x-user-role': user?.role || 'admin'
-                }
+                headers: getAuthHeaders()
             });
             const data = await res.json();
             if (res.ok && data.success) {
@@ -649,14 +628,44 @@ export default function ConfiguracionesView() {
         }
     };
 
-    const handleDownloadRawDb = () => {
-        window.location.href = '/api/backup/download-db';
-        showNotification?.("Descargando archivo de base de datos nativa gtr_pos.db...", "info");
+    const handleDownloadRawDb = async () => {
+        try {
+            showNotification?.("Iniciando descarga de base de datos nativa gtr_pos.db...", "info");
+            const res = await fetch('/api/backup/download-db', {
+                headers: getAuthHeaders()
+            });
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.error || "No se pudo descargar gtr_pos.db");
+            }
+            const blob = await res.blob();
+            triggerBlobDownload(blob, "gtr_pos.db");
+            const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
+            showNotification?.(`✓ Base de datos SQLite gtr_pos.db descargada con éxito (${sizeMb} MB).`, "success");
+        } catch (err: any) {
+            console.error("Raw DB download error:", err);
+            showNotification?.("Error al descargar base nativa: " + err.message, "error");
+        }
     };
 
-    const handleDownloadSnapshotFile = (filename: string) => {
-        window.location.href = `/api/backup/download-snapshot/${encodeURIComponent(filename)}`;
-        showNotification?.(`Descargando instantánea ${filename}...`, "info");
+    const handleDownloadSnapshotFile = async (filename: string) => {
+        try {
+            showNotification?.(`Iniciando descarga de instantánea ${filename}...`, "info");
+            const res = await fetch(`/api/backup/download-snapshot/${encodeURIComponent(filename)}`, {
+                headers: getAuthHeaders()
+            });
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.error || "No se pudo descargar la instantánea");
+            }
+            const blob = await res.blob();
+            triggerBlobDownload(blob, filename);
+            const sizeMb = (blob.size / (1024 * 1024)).toFixed(2);
+            showNotification?.(`✓ Instantánea ${filename} descargada con éxito (${sizeMb} MB).`, "success");
+        } catch (err: any) {
+            console.error("Snapshot download error:", err);
+            showNotification?.("Error al descargar instantánea: " + err.message, "error");
+        }
     };
 
     const handleOpenResetModal = () => {
@@ -787,19 +796,28 @@ export default function ConfiguracionesView() {
 
         setIsLoading(true);
         try {
+            const token = localStorage.getItem('auth_token');
             const res = await fetch('/api/settings/exchange-rate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+                    ...(user ? { 'x-user-id': String(user.id), 'x-user-role': user.role, 'x-user-username': user.username } : {})
+                },
                 body: JSON.stringify({ rate: newRate, user })
             });
             if (res.ok) {
                 const result = await res.json();
                 setExchangeRate(result.new_rate);
+                setRateInput(String(result.new_rate));
+                localStorage.setItem('cached_exchange_rate', String(result.new_rate));
+                cacheAppState('cached_exchange_rate', result.new_rate).catch(() => {});
+                window.dispatchEvent(new CustomEvent('exchange_rate_updated', { detail: result.new_rate }));
                 showNotification?.(`✓ Tipo de cambio actualizado con éxito de ${result.old_rate} a ${result.new_rate} Bs.`, "success");
                 fetchAuditLogs();
             } else {
-                const data = await res.json();
-                showNotification?.(`Error: ${data.error}`, "error");
+                const data = await res.json().catch(() => ({}));
+                showNotification?.(`Error: ${data.error || 'No se pudo actualizar el tipo de cambio'}`, "error");
             }
         } catch (err) {
             console.error(err);
@@ -1556,11 +1574,20 @@ export default function ConfiguracionesView() {
                         <input
                             type="text"
                             placeholder="Buscar cliente por nombre..."
-                            className="w-full p-2 pl-9 bg-slate-50 dark:bg-[#070b13] border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold focus:outline-none focus:border-indigo-500 dark:text-white"
+                            className="w-full p-2 pl-9 pr-8 bg-slate-50 dark:bg-[#070b13] border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold focus:outline-none focus:border-indigo-500 dark:text-white"
                             value={crmSearch}
                             onChange={e => setCrmSearch(e.target.value)}
                         />
                         <Search className="absolute left-3 top-2.5 text-slate-400" size={13} />
+                        {crmSearch && (
+                            <button
+                                type="button"
+                                onClick={() => setCrmSearch('')}
+                                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                            >
+                                <X size={13} />
+                            </button>
+                        )}
                     </div>
                 </div>
 

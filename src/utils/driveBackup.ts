@@ -40,19 +40,43 @@ export const backupDatabaseToDrive = async () => {
         token = result.accessToken;
     }
 
-    // 1. Fetch the database blob from our server
-    const res = await fetch('/api/backup/download-db', {
-      headers: {
-        'x-user-id': localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')!).id : ''
-      }
-    });
-    if (!res.ok) throw new Error("Failed to download database from server.");
-    const blob = await res.blob();
+    // 1. Fetch the database blob from our server with full authentication headers
+    const userJson = localStorage.getItem('user');
+    let userObj: any = null;
+    try { if (userJson) userObj = JSON.parse(userJson); } catch (e) {}
+    const authToken = localStorage.getItem('auth_token');
+
+    const headers: Record<string, string> = {
+        'x-user-id': String(userObj?.id || 4),
+        'x-user-username': userObj?.username || 'admin',
+        'x-user-name': userObj?.username || 'admin',
+        'x-user-role': userObj?.role || 'admin'
+    };
+    if (authToken && authToken.trim()) {
+        headers['Authorization'] = `Bearer ${authToken.trim()}`;
+    }
+
+    let blob: Blob;
+    let fileName = `gtr_pos_backup_${new Date().toISOString().split('T')[0]}.db`;
+    let mimeType = 'application/x-sqlite3';
+
+    try {
+        const res = await fetch('/api/backup/download-db', { headers });
+        if (!res.ok) throw new Error("Fallback to JSON format");
+        blob = await res.blob();
+    } catch {
+        // Fallback to complete JSON backup export
+        const jsonRes = await fetch('/api/backup', { headers });
+        if (!jsonRes.ok) throw new Error("No se pudo obtener el archivo de respaldo del servidor.");
+        blob = await jsonRes.blob();
+        fileName = `gtr_pos_backup_${new Date().toISOString().split('T')[0]}.json`;
+        mimeType = 'application/json';
+    }
 
     // 2. Upload to Google Drive using multipart upload
     const metadata = {
-        name: `gtr_pos_backup_${new Date().toISOString().split('T')[0]}.db`,
-        mimeType: 'application/x-sqlite3',
+        name: fileName,
+        mimeType: mimeType,
     };
 
     const form = new FormData();

@@ -8,7 +8,7 @@ import {
     ArrowUpRight, ShoppingBag, ClipboardList, User, ShieldCheck, Download,
     AlertTriangle, CheckCircle, XCircle, Eye, EyeOff, ChevronLeft, ChevronRight, 
     Coins, Settings, Database, Server, Info, ArrowRight, ShieldAlert, FileSpreadsheet,
-    Lock, Unlock, Package, Layers
+    Lock, Unlock, Package, Layers, X
 } from 'lucide-react';
 
 export default function AuditoriaView() {
@@ -168,6 +168,17 @@ export default function AuditoriaView() {
     useEffect(() => {
         fetchProducts();
     }, []);
+
+    // Debounce search term changes so typing or clearing updates automatically
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setPage(1);
+            if (activeTab !== 'conteo_fisico') {
+                fetchLogs();
+            }
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [searchTerm]);
 
     const triggerSearch = (e: React.FormEvent) => {
         e.preventDefault();
@@ -693,8 +704,17 @@ export default function AuditoriaView() {
                                         placeholder="Buscar por motivo, ticket, usuario o evento..."
                                         value={searchTerm}
                                         onChange={(e) => setSearchTerm(e.target.value)}
-                                        className="w-full pl-7 pr-2.5 py-1.5 bg-slate-50 dark:bg-[#070c14] border border-slate-200/80 dark:border-slate-850/60 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500"
+                                        className="w-full pl-7 pr-7 py-1.5 bg-slate-50 dark:bg-[#070c14] border border-slate-200/80 dark:border-slate-850/60 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500"
                                     />
+                                    {searchTerm && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setSearchTerm('')}
+                                            className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    )}
                                 </div>
 
                                 <select

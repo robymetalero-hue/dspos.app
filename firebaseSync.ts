@@ -698,6 +698,22 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
               } catch (e: any) {}
             }
 
+            if (table === 'settings' && docId === 'exchange_rate' && !forceOverwrite) {
+              try {
+                const localRate = db.prepare("SELECT value FROM settings WHERE key = 'exchange_rate'").get() as any;
+                if (localRate && localRate.value) {
+                  const lastAudit = db.prepare("SELECT changed_at FROM exchange_rate_audit ORDER BY id DESC LIMIT 1").get() as any;
+                  if (lastAudit && lastAudit.changed_at && data.updated_at) {
+                    const localTime = new Date(lastAudit.changed_at).getTime();
+                    const remoteTime = new Date(data.updated_at).getTime();
+                    if (!isNaN(localTime) && !isNaN(remoteTime) && localTime > remoteTime) {
+                      continue;
+                    }
+                  }
+                }
+              } catch (e: any) {}
+            }
+
             let keys = Object.keys(data);
             if (keys.length === 0) continue;
 

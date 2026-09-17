@@ -337,8 +337,12 @@ export default function CajasView() {
 
   // Filtros de liquidaciones históricas
   const filteredSettlements = settlements.filter(s => {
-    const matchesSearch = s.seller_username.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          s.admin_username.toLowerCase().includes(searchTerm.toLowerCase());
+    const q = searchTerm.toLowerCase().trim();
+    const matchesSearch = !q || 
+                          (s.seller_username || '').toLowerCase().includes(q) || 
+                          (s.admin_username || '').toLowerCase().includes(q) ||
+                          (s.notes || '').toLowerCase().includes(q) ||
+                          String(s.id).includes(q);
     const matchesSeller = sellerFilter === 'all' || String(s.seller_id) === sellerFilter;
     return matchesSearch && matchesSeller;
   });

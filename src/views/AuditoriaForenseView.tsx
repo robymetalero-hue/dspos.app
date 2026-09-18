@@ -8,7 +8,8 @@ import {
   ArrowUpRight, User, Clock, FileText, Printer, ChevronRight, 
   HelpCircle, Send, Database, BarChart3, AlertOctagon, Info, Lock,
   Check, Layers, History, TrendingUp, TrendingDown, DollarSign, CalendarDays,
-  Award, FileCheck, CheckCheck, Scale, AlertCircle, Copy
+  Award, FileCheck, CheckCheck, Scale, AlertCircle, Copy,
+  Mic, MicOff, Volume2, Radio, Activity, Headphones, Play, Square, MessageSquare, ChevronDown, ChevronUp
 } from 'lucide-react';
 
 interface PeriodProductItem {
@@ -180,6 +181,40 @@ export default function AuditoriaForenseView() {
   const [isGeneratingAI, setIsGeneratingAI] = useState<boolean>(false);
   const [aiReport, setAiReport] = useState<string | null>(null);
   const [aiCustomQuestion, setAiCustomQuestion] = useState<string>('');
+
+  // Gemini 3.8 Live Voice Forensic Console States
+  const [isLiveVoiceActive, setIsLiveVoiceActive] = useState<boolean>(false);
+  const [liveVoiceTranscript, setLiveVoiceTranscript] = useState<string>("");
+  const [isLiveConsoleExpanded, setIsLiveConsoleExpanded] = useState<boolean>(true);
+
+  useEffect(() => {
+    const handleLiveStatus = (e: any) => {
+      if (e?.detail) {
+        setIsLiveVoiceActive(!!e.detail.isLiveActive);
+        if (e.detail.transcript) {
+          setLiveVoiceTranscript(e.detail.transcript);
+        }
+      }
+    };
+    window.addEventListener('ai-live-forensic-status', handleLiveStatus);
+    return () => window.removeEventListener('ai-live-forensic-status', handleLiveStatus);
+  }, []);
+
+  const handleInvokeLiveAi = (customPrompt?: string) => {
+    const prompt = customPrompt || `Inicia la auditoría forense en vivo de GTR POS para el período actual (${periodData?.filter?.label || 'hoy'}). Revisa si los 141 productos y todas las transacciones de ventas y compras cuadran al 100%, y bríndame tu dictamen pericial con voz en tiempo real.`;
+    window.dispatchEvent(new CustomEvent('start-ai-live-forensic', {
+      detail: { prompt }
+    }));
+    setIsLiveVoiceActive(true);
+    setIsLiveConsoleExpanded(true);
+    showNotification("🎙️ IA Live Pericial invocada con éxito. Habla por tu micrófono o escucha su informe.", "info");
+  };
+
+  const handleStopLiveAi = () => {
+    window.dispatchEvent(new CustomEvent('stop-ai-live-forensic'));
+    setIsLiveVoiceActive(false);
+    showNotification("Conversación en vivo finalizada.", "info");
+  };
 
   // Reconciliation Modal
   const [reconcileTarget, setReconcileTarget] = useState<PeriodProductItem | null>(null);
@@ -452,7 +487,11 @@ export default function AuditoriaForenseView() {
   }
 
   return (
-    <div className="p-3 sm:p-5 md:p-8 max-w-7xl mx-auto space-y-4 sm:space-y-6">
+    <div 
+      id="auditoria-forense-scroll-container"
+      className="h-full w-full overflow-y-auto overflow-x-hidden p-3 sm:p-5 md:p-8 max-w-7xl mx-auto space-y-4 sm:space-y-6 pb-48 select-text scroll-smooth"
+      style={{ WebkitOverflowScrolling: 'touch' }}
+    >
       
       {/* Sleek, Compact Mobile-Optimized Header */}
       <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-4 sm:p-6 rounded-2xl shadow-xl border border-indigo-800/40 relative overflow-hidden">
@@ -481,7 +520,24 @@ export default function AuditoriaForenseView() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 self-start md:self-center shrink-0">
+          <div className="flex items-center gap-2 self-start md:self-center shrink-0 flex-wrap">
+            <button
+              onClick={() => {
+                if (isLiveVoiceActive) {
+                  handleStopLiveAi();
+                } else {
+                  handleInvokeLiveAi();
+                }
+              }}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold shadow-lg flex items-center gap-1.5 transition active:scale-95 ${
+                isLiveVoiceActive 
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/40 ring-2 ring-rose-400 animate-pulse' 
+                  : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 text-white shadow-emerald-600/30'
+              }`}
+            >
+              <Mic className={`w-4 h-4 ${isLiveVoiceActive ? 'animate-bounce text-white' : 'text-emerald-100'}`} />
+              <span>{isLiveVoiceActive ? '🔴 En Vivo (Finalizar)' : '🎙️ Invocar IA Live Pericial'}</span>
+            </button>
             <button
               onClick={() => {
                 if (activeTab === 'product_detail' && selectedProduct) {
@@ -557,6 +613,165 @@ export default function AuditoriaForenseView() {
             <span>🔍 Ficha de Producto</span>
           </button>
         </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* CONSOLA PERICIAL IA LIVE - GEMINI 3.8 LIVE (VOZ Y AUDITORÍA EN TIEMPO REAL) */}
+      {/* ========================================================================= */}
+      <div className={`p-4 sm:p-5 rounded-2xl border transition-all duration-300 shadow-xl relative overflow-hidden ${
+        isLiveVoiceActive 
+          ? 'bg-gradient-to-br from-slate-900 via-indigo-950 to-emerald-950/80 border-emerald-500/50 ring-1 ring-emerald-500/30 text-white' 
+          : 'bg-white dark:bg-slate-800/95 border-slate-200 dark:border-slate-700/80 text-slate-800 dark:text-slate-100 shadow-sm'
+      }`}>
+        {isLiveVoiceActive && (
+          <div className="absolute -right-10 -top-10 w-60 h-60 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
+        )}
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+              isLiveVoiceActive 
+                ? 'bg-emerald-500 text-slate-950 ring-4 ring-emerald-400/30 shadow-lg' 
+                : 'bg-indigo-100 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400'
+            }`}>
+              {isLiveVoiceActive ? <Radio className="w-5 h-5 animate-pulse" /> : <Mic className="w-5 h-5" />}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm sm:text-base font-bold flex items-center gap-1.5">
+                  <span>Consola Pericial IA Live</span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 font-semibold border border-indigo-500/30">
+                    Gemini 3.8 Live
+                  </span>
+                </h2>
+                {isLiveVoiceActive ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 animate-pulse">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping mr-0.5" /> En Vivo • Micrófono y Altavoz Activos
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                    En Espera
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                La IA inspecciona registros de ventas, inventario y kárdex en vivo mediante herramientas de base de datos mientras te habla con voz.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+            {isLiveVoiceActive ? (
+              <button
+                onClick={handleStopLiveAi}
+                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-rose-600/30 transition active:scale-95"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Finalizar Llamada</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => handleInvokeLiveAi()}
+                className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-emerald-600/30 transition active:scale-95"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Iniciar Conversación por Voz</span>
+              </button>
+            )}
+            <button
+              onClick={() => setIsLiveConsoleExpanded(!isLiveConsoleExpanded)}
+              className="p-2 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition"
+              title="Colapsar/Expandir Consola"
+            >
+              {isLiveConsoleExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        {isLiveConsoleExpanded && (
+          <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-700/60">
+            {/* Audio Wave Visualizer when Active */}
+            {isLiveVoiceActive && (
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-emerald-500/30 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-1.5 h-7 px-2">
+                  {[40, 75, 100, 60, 30, 85, 95, 50, 70, 90, 45, 80, 60, 35].map((h, i) => (
+                    <span 
+                      key={i} 
+                      className="w-1.5 bg-gradient-to-t from-emerald-500 to-teal-300 rounded-full animate-pulse"
+                      style={{ 
+                        height: `${h}%`,
+                        animationDuration: `${0.4 + (i % 5) * 0.15}s`
+                      }} 
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 text-xs font-mono text-emerald-300">
+                  <Headphones className="w-4 h-4 text-emerald-400 animate-bounce" />
+                  <span>Voz Zephyr en tiempo real • Audio Bidireccional</span>
+                </div>
+              </div>
+            )}
+
+            {/* Live Spoken Transcript Box */}
+            <div className={`p-3.5 rounded-xl text-xs sm:text-sm font-sans leading-relaxed border transition ${
+              isLiveVoiceActive 
+                ? 'bg-slate-950/90 border-slate-800 text-slate-100' 
+                : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300'
+            }`}>
+              <div className="flex items-center justify-between text-[11px] font-bold text-slate-400 mb-1.5">
+                <span className="flex items-center gap-1">
+                  <Volume2 className="w-3.5 h-3.5 text-indigo-400" />
+                  {isLiveVoiceActive ? 'Último informe hablado por la IA en vivo:' : 'Transcripción y Estado:'}
+                </span>
+                {liveVoiceTranscript && (
+                  <button 
+                    onClick={() => navigator.clipboard.writeText(liveVoiceTranscript)}
+                    className="text-slate-400 hover:text-indigo-400 flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" /> Copiar texto
+                  </button>
+                )}
+              </div>
+              
+              <div className="min-h-[48px] max-h-36 overflow-y-auto whitespace-pre-wrap select-text font-normal text-xs sm:text-sm">
+                {liveVoiceTranscript ? (
+                  <span className="text-slate-200 dark:text-slate-100">{liveVoiceTranscript}</span>
+                ) : isLiveVoiceActive ? (
+                  <span className="text-emerald-400/80 italic flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 animate-spin" /> Conectado con Gemini 3.8 Live. Puedes hablar por el micrófono ahora o pulsar una de las preguntas periciales de abajo...
+                  </span>
+                ) : (
+                  <span className="text-slate-500 italic">
+                    Pulsa "Iniciar Conversación por Voz" o cualquiera de los botones de auditoría rápida abajo para comenzar la conversación pericial con Gemini 3.8 Live.
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Quick Spoken Queries Bar */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 mr-1 flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-indigo-400" /> Preguntas Periciales Rápidas:
+              </span>
+              {[
+                { label: '🔍 ¿Hay fallas o desvíos contables hoy?', prompt: 'Realiza una auditoría completa de hoy y dime con voz clara si todos los 141 productos y las transacciones cuadran al 100% o si detectaste alguna falla o desvío.' },
+                { label: '📦 Audita historial de Coca Cola 2L', prompt: 'Inspecciona a fondo el kárdex y las ventas de Coca Cola 2L y dime si su stock físico cuadra exactamente con sus ventas y compras.' },
+                { label: '💰 ¿Cuáles fueron las ventas y montos de hoy?', prompt: 'Revisa las transacciones de ventas de hoy y dame el resumen de ventas cobradas, montos en Bolivianos y cajeros que operaron.' },
+                { label: '📑 ¿Cuadran las transacciones del período?', prompt: 'Revisa las transacciones registradas en el período y compáralas con el kárdex para certificar que no falte ni sobre ningún centavo ni unidad.' }
+              ].map((query, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => {
+                    handleInvokeLiveAi(query.prompt);
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 hover:text-indigo-600 dark:hover:text-indigo-300 border border-slate-200 dark:border-slate-700 transition active:scale-95"
+                >
+                  {query.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Temporal Control Bar (Día, Semana, Mes, Año, Histórico) */}

@@ -1191,7 +1191,7 @@ function AppLayout() {
                 </header>)}
 
                 {/* Main page view content display */}
-                <main className={`flex-grow flex-1 overflow-hidden relative ${isKioskLocked ? 'pb-16 lg:pb-0' : ''}`}>
+                <main className={`flex-grow flex-1 relative ${isKioskLocked ? 'pb-16 lg:pb-0' : ''} ${view === 'pos' ? 'overflow-hidden' : 'overflow-hidden'}`}>
                     <AnimatePresence mode="wait">
                         <motion.div
                             key={view}
@@ -1199,7 +1199,7 @@ function AppLayout() {
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -15 }}
                             transition={{ duration: 0.3, ease: "easeOut" }}
-                            className="h-full w-full overflow-hidden"
+                            className={`h-full w-full ${view === 'pos' ? 'overflow-hidden' : 'overflow-y-auto'}`}
                         >
                             <React.Suspense fallback={<LoadingViewFallback />}>
                                 {view === 'inicio' && <InicioView />}

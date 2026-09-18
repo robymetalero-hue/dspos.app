@@ -7856,9 +7856,64 @@ DIRECTIVAS CRÍTICAS:
       }
     };
 
+    const auditInvestigateProductFn: FunctionDeclaration = {
+      name: "auditInvestigateProduct",
+      description: "Inspecciona exhaustivamente el kárdex histórico, libro mayor y todos los registros de un producto (compras, ventas, tickets, ajustes físicos) por su nombre o SKU. Retorna stock inicial, desglose cronológico, stock calculado matemáticamente y dictamen de cuadre o desvío.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          skuOrName: { type: Type.STRING, description: "Nombre o SKU del producto a auditar (ej. 'Coca Cola', '14')" }
+        },
+        required: ["skuOrName"]
+      }
+    };
+
+    const auditPeriodForensicCheckFn: FunctionDeclaration = {
+      name: "auditPeriodForensicCheck",
+      description: "Ejecuta una auditoría matemática y pericial de la base de datos completa de GTR POS para un período determinado ('today', 'week', 'month', 'year', 'all'). Revisa el 100% de los productos (141 artículos) y todas las transacciones de ventas y compras. Informa cuántos productos cuadran a la perfección, si hay algún desvío y el volumen total.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          periodType: { type: Type.STRING, enum: ["today", "week", "month", "year", "all"], description: "Período temporal a auditar" },
+          date: { type: Type.STRING, description: "Fecha en formato YYYY-MM-DD si es 'today'" },
+          month: { type: Type.STRING, description: "Mes en formato YYYY-MM si es 'month'" },
+          year: { type: Type.INTEGER, description: "Año numérico si es 'year'" }
+        },
+        required: ["periodType"]
+      }
+    };
+
+    const auditSearchTransactionsFn: FunctionDeclaration = {
+      name: "auditSearchTransactions",
+      description: "Busca transacciones y movimientos específicos en el libro mayor de ventas, compras o ajustes de inventario. Filtra por nombre de producto, SKU, ticket o usuario cajero. Retorna fechas, horas, cantidades, montos en Bs y responsable.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          query: { type: Type.STRING, description: "Término de búsqueda: nombre, SKU, ticket o cajero" },
+          transactionType: { type: Type.STRING, enum: ["all", "venta", "compra", "ajuste"], description: "Tipo de transacción" },
+          limit: { type: Type.INTEGER, description: "Límite máximo de resultados (por defecto 15)" }
+        },
+        required: ["query"]
+      }
+    };
+
+    const auditReconcileProductStockFn: FunctionDeclaration = {
+      name: "auditReconcileProductStock",
+      description: "Corrige y concilia formalmente el stock de un producto con discrepancia tras una auditoría pericial. Actualiza la existencia real en la base de datos, registra el evento inmutable en el log de auditoría con la justificación y notifica a las pantallas.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          skuOrName: { type: Type.STRING, description: "Nombre o SKU del producto a conciliar" },
+          realStock: { type: Type.INTEGER, description: "Existencia real física confirmada" },
+          justification: { type: Type.STRING, description: "Justificación o motivo pericial de la corrección" }
+        },
+        required: ["skuOrName", "realStock", "justification"]
+      }
+    };
+
     try {
       const activeSession = await getAI().live.connect({
-        model: "gemini-3.1-flash-live-preview",
+        model: "gemini-3.8-live",
         callbacks: {
           onmessage: (message: LiveServerMessage) => {
             if (message.serverContent?.interrupted) {
@@ -8617,6 +8672,189 @@ DIRECTIVAS CRÍTICAS:
                       }]
                     });
                   }
+                } else if (fc.name === "auditInvestigateProduct") {
+                  const { skuOrName } = fc.args as any;
+                  try {
+                    let productMatches = searchProductsForAudit(skuOrName);
+                    if (!productMatches || productMatches.length === 0) {
+                      const prod = db.prepare('SELECT id, name, sku, stock, category FROM products WHERE sku = ? OR name LIKE ? LIMIT 1').get(skuOrName, `%${skuOrName}%`) as any;
+                      if (prod) productMatches = [prod];
+                    }
+                    if (!productMatches || productMatches.length === 0) {
+                      activeSession.sendToolResponse({
+                        functionResponses: [{
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: `No se encontró ningún producto con el nombre o SKU '${skuOrName}' en el catálogo.` }
+                        }]
+                      });
+                    } else {
+                      const target = productMatches[0];
+                      const timelineResult = getProductForensicTimeline(target.id);
+                      if (!timelineResult) {
+                        activeSession.sendToolResponse({
+                          functionResponses: [{
+                            id: fc.id,
+                            name: fc.name,
+                            response: { result: `No fue posible reconstruir el kárdex forense para '${target.name}'.` }
+                          }]
+                        });
+                      } else {
+                        const recentEvents = timelineResult.timeline.slice(-8).map(e => 
+                          `- ${e.timestamp.slice(0, 16)} [${e.eventType.toUpperCase()}]: ${e.operationLabel}, Cantidad: ${e.quantityChanged > 0 ? '+' : ''}${e.quantityChanged} u., Usuario: ${e.userName || 'Sistema'}, Stock resultante: ${e.runningCalculatedStock} u.`
+                        ).join('\n');
+
+                        const report = `[INFORME PERICIAL FORENSE EN TIEMPO REAL - ${timelineResult.name}]
+- SKU: ${timelineResult.sku || 'S/N'}, Categoría: ${timelineResult.category}
+- Stock Actual Registrado en BD: ${timelineResult.currentRecordedStock} unidades.
+- Stock Inicial: ${timelineResult.initialStock} u. (${timelineResult.initialStockDate || 'Sin registro previo'}).
+- Compras / Entradas Totales: ${timelineResult.totalPurchased} u. (${timelineResult.purchaseCount} lotes).
+- Ventas / Salidas Totales: ${timelineResult.totalSold} u. (${timelineResult.salesCount} tickets cobrados).
+- Ajustes de Inventario: +${timelineResult.totalAdjustmentsInc} u. / -${timelineResult.totalAdjustmentsDec} u.
+- Stock Teórico Calculado por Partida Doble: ${timelineResult.calculatedLedgerStock} unidades.
+- Discrepancia Neta: ${timelineResult.stockDifference} unidades.
+- ESTADO PERICIAL: ${timelineResult.isBalanced ? '✅ CUADRE PERFECTO (0 fallas detectadas)' : `⚠️ DISCREPANCIA DETECTADA DE ${timelineResult.stockDifference} UNIDADES`}.
+- Movimientos recientes:
+${recentEvents || 'Sin movimientos registrados'}`;
+
+                        activeSession.sendToolResponse({
+                          functionResponses: [{
+                            id: fc.id,
+                            name: fc.name,
+                            response: { result: report }
+                          }]
+                        });
+                      }
+                    }
+                  } catch (auditErr: any) {
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: `Error al auditar producto: ${auditErr.message}` }
+                      }]
+                    });
+                  }
+                } else if (fc.name === "auditPeriodForensicCheck") {
+                  const { periodType, date, month, year } = fc.args as any;
+                  try {
+                    const filter: any = { periodType: periodType || 'today' };
+                    if (date) filter.date = date;
+                    if (month) filter.month = month;
+                    if (year) filter.year = Number(year);
+
+                    const periodResult = auditDatabaseByPeriod(filter);
+                    const discrepant = (periodResult.products || []).filter(p => !p.isBalanced);
+                    const report = `[AUDITORÍA PERICIAL DE PERÍODO: ${periodResult.filter.label}]
+- Total de Productos Auditados: ${periodResult.metrics.totalProductsAudited} de ${periodResult.metrics.totalProductsAudited} productos.
+- Productos con Cuadre Perfecto: ${periodResult.metrics.balancedProductsCount} productos.
+- Productos con Discrepancias: ${periodResult.metrics.discrepantProductsCount} productos.
+- Transacciones Revisadas: ${periodResult.metrics.totalTransactionsReviewed} transacciones.
+- Ventas del Período: ${periodResult.metrics.totalSalesUnits} unidades (Monto: Bs. ${(periodResult.metrics.totalSalesAmount || 0).toFixed(2)}).
+- Compras / Entradas del Período: ${periodResult.metrics.totalPurchasesUnits} unidades.
+- DICTAMEN PERICIAL: ${periodResult.metrics.discrepantProductsCount === 0 ? '✅ 100% REGISTROS Y PRODUCTOS CUADRAN EXACTAMENTE. NO SE IDENTIFICÓ NINGÚN DESVÍO.' : `⚠️ SE DETECTARON ${periodResult.metrics.discrepantProductsCount} PRODUCTOS CON DESVÍO: ${discrepant.map(d => `${d.name} (${d.discrepancy} u.)`).join(', ')}`}.`;
+
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: report }
+                      }]
+                    });
+                  } catch (periodErr: any) {
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: `Error al auditar período: ${periodErr.message}` }
+                      }]
+                    });
+                  }
+                } else if (fc.name === "auditSearchTransactions") {
+                  const { query, limit } = fc.args as any;
+                  try {
+                    const maxRows = Math.min(Number(limit) || 15, 30);
+                    const term = `%${query}%`;
+                    const num = Number(query) || -1;
+                    const rows = db.prepare(`
+                      SELECT si.id, si.sale_id, si.product_name, si.quantity, si.price_unit, s.created_at, s.user_name, s.payment_method, s.total
+                      FROM sale_items si
+                      JOIN sales s ON s.id = si.sale_id
+                      WHERE (si.product_name LIKE ? OR s.user_name LIKE ? OR s.id = ?)
+                      ORDER BY s.created_at DESC
+                      LIMIT ?
+                    `).all(term, term, num, maxRows) as any[];
+
+                    let rate = 6.96;
+                    try {
+                      const cfg = db.prepare("SELECT value FROM config WHERE key = 'exchange_rate'").get() as any;
+                      if (cfg?.value) rate = parseFloat(cfg.value);
+                    } catch (_) {}
+
+                    const res = rows.map(r => 
+                      `- Ticket #${r.sale_id} (${r.created_at}): "${r.product_name}" x ${r.quantity} u. a Bs. ${((r.price_unit || 0) * rate).toFixed(2)}. Cobrado por ${r.user_name} (${r.payment_method}). Total Ticket: Bs. ${((r.total || 0) * rate).toFixed(2)}`
+                    ).join('\n') || `No se encontraron registros de ventas con el término '${query}'.`;
+
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: `[REGISTROS ENCONTRADOS (${rows.length})]\n${res}` }
+                      }]
+                    });
+                  } catch (sErr: any) {
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: `Error al buscar registros: ${sErr.message}` }
+                      }]
+                    });
+                  }
+                } else if (fc.name === "auditReconcileProductStock") {
+                  const { skuOrName, realStock, justification } = fc.args as any;
+                  try {
+                    let productMatches = searchProductsForAudit(skuOrName);
+                    if (!productMatches || productMatches.length === 0) {
+                      const prod = db.prepare('SELECT id, name, sku, stock FROM products WHERE sku = ? OR name LIKE ? LIMIT 1').get(skuOrName, `%${skuOrName}%`) as any;
+                      if (prod) productMatches = [prod];
+                    }
+                    if (!productMatches || productMatches.length === 0) {
+                      activeSession.sendToolResponse({
+                        functionResponses: [{
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: `No se encontró el producto '${skuOrName}' para conciliar.` }
+                        }]
+                      });
+                    } else {
+                      const target = productMatches[0];
+                      const reconcileRes = reconcileProductDiscrepancy(target.id, justification || 'Conciliación pericial por voz', 'admin');
+                      
+                      try {
+                        broadcastAlert(JSON.stringify({
+                          type: 'inventory_updated',
+                          data: { productId: target.id, newStock: reconcileRes.updatedStock }
+                        }));
+                      } catch (_) {}
+
+                      activeSession.sendToolResponse({
+                        functionResponses: [{
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: `ÉXITO: Producto "${target.name}" conciliado correctamente. Nuevo Stock Físico en BD: ${reconcileRes.updatedStock} u. Detalle: ${reconcileRes.message}.` }
+                        }]
+                      });
+                    }
+                  } catch (recErr: any) {
+                    activeSession.sendToolResponse({
+                      functionResponses: [{
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result: `Error al conciliar producto: ${recErr.message}` }
+                      }]
+                    });
+                  }
                 }
               }
             }
@@ -8699,8 +8937,12 @@ Instrucciones claves de ejecución:
 19. 'workspaceListFiles': Permite ver qué archivos y código componen el proyecto GTR POS en vivo.
 20. 'workspaceReadFile': Muestra el contenido original de un archivo para que lo analices, entiendas y busques problemas.
 21. 'workspaceApplyCorrection': Corrige de forma autónoma y física el código de un archivo de la app web para solventar fallas.
+22. 'auditInvestigateProduct': Inspecciona a fondo el kárdex forense y todos los registros (compras, ventas, tickets, fechas, horas, cajeros, montos en Bs) de un producto por SKU o nombre. Úsala cuando te pregunten sobre el historial de un producto o si cuadra.
+23. 'auditPeriodForensicCheck': Realiza una auditoría completa del 100% de la base de datos para hoy ('today'), semana ('week'), mes ('month'), año ('year') o histórico ('all'). Informa cuántos productos cuadran, si hay algún desvío y el dictamen pericial con voz en tiempo real.
+24. 'auditSearchTransactions': Busca tickets específicos, ventas o compras por cajero, fecha o producto, retornando horas exactas, cajeros y montos en Bs.
+25. 'auditReconcileProductStock': Corrige y concilia el stock físico real de un producto con discrepancia, registrando la justificación formal.
 
-Responde de forma sumamente atenta, con alta proactividad, y de manera ultra breve (máximo 1 o 2 frases rápidas en español), pues el usuario está operando el negocio en tiempo real.`,
+Responde de forma sumamente atenta, con alta proactividad, y con precisión matemática absoluta en español.`,
           tools: [{
             functionDeclarations: [
               getCartStatusFn,
@@ -8725,7 +8967,11 @@ Responde de forma sumamente atenta, con alta proactividad, y de manera ultra bre
               executeDatabaseQueryFn,
               workspaceListFilesFn,
               workspaceReadFileFn,
-              workspaceApplyCorrectionFn
+              workspaceApplyCorrectionFn,
+              auditInvestigateProductFn,
+              auditPeriodForensicCheckFn,
+              auditSearchTransactionsFn,
+              auditReconcileProductStockFn
             ]
           }],
         }

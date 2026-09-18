@@ -154,6 +154,12 @@ export default function AudioVoice() {
     };
     const [transcript, setTranscript] = useState("Modo de voz listo. Di algo como: 'IA, agrega un sándwich de jamón'");
     const [audioQueue, setAudioQueue] = useState<string[]>([]);
+
+    useEffect(() => {
+        safeDispatchEvent('ai-live-forensic-status', {
+            detail: { isLiveActive, connected, transcript }
+        });
+    }, [isLiveActive, connected, transcript]);
     
     // Facebook Messenger-style expansion/collapse state
     const [isOpen, setIsOpen] = useState(false);
@@ -343,9 +349,28 @@ export default function AudioVoice() {
         const handleOpenAi = () => {
             setIsOpen(true);
         };
+        const handleStartLiveForensic = (e: any) => {
+            setIsOpen(true);
+            setIsLiveActive(true);
+            setTimeout(() => {
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({
+                        type: 'context_update',
+                        text: `[MODO AUDITORÍA FORENSE PERICIAL ACTIVO]: El Administrador está inspeccionando la auditoría de registros en tiempo real en la pantalla de Auditoría Forense. Tienes acceso completo a todos los registros del sistema. Usa tus herramientas periciales ('auditPeriodForensicCheck', 'auditInvestigateProduct', 'auditSearchTransactions') para responder de forma hablada con precisión matemática, detallando nombres, fechas, horas, cajeros y montos en Bs.`
+                    }));
+                }
+            }, 700);
+        };
+        const handleStopLiveForensic = () => {
+            setIsLiveActive(false);
+        };
         window.addEventListener('open-ai-quick-commands', handleOpenAi);
+        window.addEventListener('start-ai-live-forensic', handleStartLiveForensic);
+        window.addEventListener('stop-ai-live-forensic', handleStopLiveForensic);
         return () => {
             window.removeEventListener('open-ai-quick-commands', handleOpenAi);
+            window.removeEventListener('start-ai-live-forensic', handleStartLiveForensic);
+            window.removeEventListener('stop-ai-live-forensic', handleStopLiveForensic);
         };
     }, []);
 

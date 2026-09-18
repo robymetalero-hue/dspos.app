@@ -12,7 +12,8 @@ import rateLimit from "express-rate-limit";
 import { db, getBoliviaISOString, insertSystemAuditLog } from "./database.ts";
 import { hashPassword, verifyPassword, isPasswordHashed, getJwtSecret } from "./authSecurity.ts";
 import { normalizeProductName } from "./src/utils/productUtils.ts";
-import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData, recordDeletion, deleteFromFirestore } from "./firebaseSync.ts";
+import { pullFirestoreToLocal, syncAfterWrite, pushAllLocalToFirestore, firestore, clearAllFirestoreAndLocalData, recordDeletion, deleteFromFirestore, reconcileCatalogStockWithLedger } from "./firebaseSync.ts";
+import { getProductForensicTimeline, auditEntireCatalog, searchProductsForAudit, generateForensicMarkdownReport, getAvailableAuditPeriods, auditDatabaseByPeriod, reconcileProductDiscrepancy } from "./forensicAuditEngine.ts";
 import { requestContextStorage, getRecentFirestoreLedger, getFirestoreLedgerStats, validateFirestoreWriteOperation } from "./firestoreIntegrityMiddleware.ts";
 import { collection, getDocs, doc, getDoc, setDoc } from "firebase/firestore";
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration } from "@google/genai";
@@ -2366,9 +2367,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
         INSERT INTO products (name, category, sku, stock, price_unit, price_bulk, price_cost, stock_alarm, image)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
       `);
-      const updateStockStmt = db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
+      const updateStockStmt = db.prepare('UPDATE products SET stock = stock + ?, updated_at = ? WHERE id = ?');
       const overwriteStmt = db.prepare(`
-        UPDATE products SET name = ?, category = ?, stock = ?, price_unit = ?, price_bulk = ?, price_cost = ?, stock_alarm = ?
+        UPDATE products SET name = ?, category = ?, stock = ?, price_unit = ?, price_bulk = ?, price_cost = ?, stock_alarm = ?, updated_at = ?
         WHERE id = ?
       `);
 
@@ -2423,7 +2424,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
             if (behavior === 'skip') {
               skipped++;
             } else if (behavior === 'overwrite') {
-              overwriteStmt.run(name, category, stock, price_unit, price_bulk, price_cost, stock_alarm, existing.id);
+              overwriteStmt.run(name, category, stock, price_unit, price_bulk, price_cost, stock_alarm, getBoliviaISOString(), existing.id);
               updated++;
               productIdsToSync.push(existing.id);
 
@@ -2473,7 +2474,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
               }
             } else {
               // Default to 'update_stock': add new stock to existing
-              updateStockStmt.run(stock, existing.id);
+              updateStockStmt.run(stock, getBoliviaISOString(), existing.id);
               updated++;
               productIdsToSync.push(existing.id);
 
@@ -5229,9 +5230,10 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
     }
     isBackSyncing = true;
     try {
-      console.log("[PWA API Sync] Triggering full bidirectional sync with Firestore...");
-      await pushAllLocalToFirestore();
+      console.log("[PWA API Sync] Triggering safe bidirectional sync (pull first, reconcile ledger, then push)...");
       await pullFirestoreToLocal();
+      reconcileCatalogStockWithLedger();
+      await pushAllLocalToFirestore();
       lastSyncTime = new Date().toISOString();
       res.json({ status: "success", lastSyncTime });
     } catch (e: any) {
@@ -5241,6 +5243,308 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
       isBackSyncing = false;
     }
   });
+
+  app.post("/api/inventory/reconcile-catalog", async (req, res) => {
+    try {
+      const result = reconcileCatalogStockWithLedger();
+      res.json({ success: true, ...result });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ==========================================
+  // RESTRICTED FORENSIC AUDIT & AI ENGINE APIS
+  // Strict Access: Only Admin or delegated users
+  // ==========================================
+  const requireForensicAuditAccess = (req: any, res: any, next: any) => {
+    const role = String(req.headers['x-user-role'] || (req as any).auditUser?.userRole || '').toLowerCase();
+    const username = String(req.headers['x-user-username'] || (req as any).auditUser?.userName || '').toLowerCase();
+
+    if (role === 'admin' || role === 'propietario' || role === 'administrador' || username === 'admin' || username === 'roby') {
+      return next();
+    }
+
+    try {
+      const rawPerms = req.headers['x-user-permissions'] || '';
+      const perms = JSON.parse(rawPerms || '{}');
+      if (perms.access_forensic_audit === true) {
+        return next();
+      }
+    } catch (e) {}
+
+    return res.status(403).json({
+      error: "ACCESO DENEGADO: El módulo de Auditoría Forense con IA está restringido exclusivamente a la Administración.",
+      code: "RESTRICTED_FORENSIC_MODULE"
+    });
+  };
+
+  app.get("/api/forensic-audit/periods", requireForensicAuditAccess, (req, res) => {
+    try {
+      const periods = getAvailableAuditPeriods();
+      res.json({ success: true, ...periods });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/forensic-audit/period-audit", requireForensicAuditAccess, (req, res) => {
+    try {
+      const {
+        periodType = 'month',
+        date,
+        month,
+        year,
+        startDate,
+        endDate,
+        productId,
+        onlyDiscrepancies,
+        search
+      } = req.query as any;
+
+      const result = auditDatabaseByPeriod({
+        periodType: periodType as any,
+        date: date ? String(date) : undefined,
+        month: month ? String(month) : undefined,
+        year: year ? Number(year) : undefined,
+        startDate: startDate ? String(startDate) : undefined,
+        endDate: endDate ? String(endDate) : undefined,
+        productId: productId ? Number(productId) : undefined,
+        onlyDiscrepancies: onlyDiscrepancies === 'true' || onlyDiscrepancies === true,
+        search: search ? String(search) : undefined
+      });
+
+      res.json({ success: true, ...result });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/forensic-audit/reconcile", requireForensicAuditAccess, (req, res) => {
+    try {
+      const { productId, notes } = req.body;
+      if (!productId) {
+        return res.status(400).json({ error: "ID de producto requerido" });
+      }
+      const adminUsername = req.headers["x-user-name"] ? String(req.headers["x-user-name"]) : "admin";
+      const result = reconcileProductDiscrepancy(Number(productId), notes, adminUsername);
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/forensic-audit/catalog", requireForensicAuditAccess, (req, res) => {
+    try {
+      const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+      const summary = auditEntireCatalog({ startDate, endDate });
+      res.json({ success: true, ...summary });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/forensic-audit/product/:id", requireForensicAuditAccess, (req, res) => {
+    try {
+      const productId = Number(req.params.id);
+      if (!productId || isNaN(productId)) {
+        return res.status(400).json({ error: "ID de producto inválido" });
+      }
+      const { startDate, endDate } = req.query as { startDate?: string; endDate?: string };
+      const result = getProductForensicTimeline(productId, { startDate, endDate });
+      if (!result) {
+        return res.status(404).json({ error: "Producto no encontrado en catálogo" });
+      }
+      res.json({ success: true, ...result });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/forensic-audit/search", requireForensicAuditAccess, (req, res) => {
+    try {
+      const q = String(req.query.q || '');
+      const results = searchProductsForAudit(q);
+      res.json({ success: true, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/forensic-audit/ai-analyze", requireForensicAuditAccess, async (req, res) => {
+    try {
+      const {
+        productId,
+        scope,
+        periodType,
+        date,
+        month,
+        year,
+        startDate,
+        endDate,
+        onlyDiscrepancies,
+        customQuestion
+      } = req.body;
+      
+      let factualContext = "";
+      let productDetails: any = null;
+      let periodResult: any = null;
+
+      if (scope === 'single_product' && productId) {
+        productDetails = getProductForensicTimeline(Number(productId), { startDate, endDate });
+        if (!productDetails) {
+          return res.status(404).json({ error: "Producto no encontrado para auditar" });
+        }
+
+        // Build compact chronological transcript for Gemini
+        const eventsSummary = productDetails.timeline.map((t: any, idx: number) => {
+          return `[#${idx + 1}] Fecha: ${t.timestamp} | Op: ${t.operationLabel} | Usuario: ${t.userName} (${t.userRole || 'vendedor'}) | Cambio: ${t.quantityChanged > 0 ? '+' : ''}${t.quantityChanged} | SaldoCalculado: ${t.runningCalculatedStock} | SaldoRegistradoEnSnapshot: ${t.recordedStockAfter !== undefined ? t.recordedStockAfter : 'N/A'} ${t.isAnomaly ? '--> ANOMALIA DETECTADA (Desfase: ' + t.discrepancyDelta + ')' : ''}`;
+        }).join('\n');
+
+        const gapsSummary = productDetails.identifiedGaps.map((g: any, idx: number) => {
+          return `[G${idx + 1}] Fecha: ${g.timestamp} | Usuario: ${g.userName} | Esperado: ${g.expectedStock} | Registrado: ${g.recordedStock} | Brecha: ${g.gap} | Causa: ${g.reason}`;
+        }).join('\n');
+
+        factualContext = `
+AUDITORÍA DE PRODUCTO ÚNICO:
+- Producto: "${productDetails.name}" (SKU: "${productDetails.sku}", Categoría: "${productDetails.category}")
+- Stock Actual en Ficha: ${productDetails.currentRecordedStock} unidades
+- Stock Real según Libro Mayor Matemático: ${productDetails.calculatedLedgerStock} unidades
+- Estado de Balance: ${productDetails.isBalanced ? "CUADRADO EXACTO (Diferencia: 0)" : `DESCUADRE DETECTADO (Diferencia: ${productDetails.stockDifference > 0 ? '+' : ''}${productDetails.stockDifference})`}
+- Stock Inicial de Alta: ${productDetails.initialStock} unidades (Fecha: ${productDetails.initialStockDate || 'N/A'}, Por: ${productDetails.initialStockAuthor})
+- Total Ingresos Compras: ${productDetails.totalPurchased} unidades en ${productDetails.purchaseCount} lotes
+- Total Salidas Ventas: ${productDetails.totalSold} unidades en ${productDetails.salesCount} ventas
+- Total Ajustes Manuales Positivos: +${productDetails.totalAdjustmentsInc} unidades
+- Total Ajustes Manuales Negativos: -${productDetails.totalAdjustmentsDec} unidades
+- Total Devoluciones: +${productDetails.totalReturns} unidades
+- Desfases/Saltos Detectados en Línea de Tiempo: ${productDetails.identifiedGaps.length} eventos
+
+HISTORIAL DE EVENTOS IDENTIFICADOS:
+${eventsSummary.slice(0, 15000)}
+
+BRECHAS Y DESFASES ESPECÍFICOS IDENTIFICADOS:
+${gapsSummary || "No se detectaron brechas intermedias."}
+        `;
+      } else if (scope === 'period') {
+        periodResult = auditDatabaseByPeriod({
+          periodType: periodType || 'month',
+          date,
+          month,
+          year,
+          startDate,
+          endDate,
+          productId: productId ? Number(productId) : undefined,
+          onlyDiscrepancies: !!onlyDiscrepancies
+        });
+
+        factualContext = `
+AUDITORÍA DE BASE DE DATOS POR PERÍODO (${periodResult.filter.label}):
+- Rango de Fechas: ${periodResult.filter.startStr} a ${periodResult.filter.endStr}
+- Total Productos Auditados: ${periodResult.metrics.totalProductsAudited}
+- Productos 100% Cuadrados: ${periodResult.metrics.balancedProductsCount}
+- Productos con Desfases o Anomalías: ${periodResult.metrics.discrepantProductsCount}
+- Total Unidades Desfasadas: ${periodResult.metrics.totalUnitsDrift} unidades
+- Total Transacciones Revisadas Registro por Registro: ${periodResult.metrics.totalTransactionsReviewed}
+- Total Compras Ingresadas: +${periodResult.metrics.totalPurchasesUnits} unidades (${periodResult.metrics.purchasesCount} lotes)
+- Total Ventas Egresadas: -${periodResult.metrics.totalSalesUnits} unidades (${periodResult.metrics.salesCount} ventas, Total Bs. ${periodResult.metrics.totalSalesAmount})
+- Total Ajustes Realizados: ${periodResult.metrics.totalAdjustmentsCount}
+- Fecha y Hora de Ejecución de Auditoría: ${periodResult.executionTimestamp}
+
+ANOMALÍAS REGISTRADAS EN ESTE PERÍODO:
+${JSON.stringify(periodResult.anomalies.slice(0, 15), null, 2)}
+        `;
+      } else {
+        // Entire Catalog Audit
+        const catalogSummary = auditEntireCatalog({ startDate, endDate });
+        factualContext = `
+AUDITORÍA GLOBAL DE CATÁLOGO:
+- Total Productos Auditados: ${catalogSummary.totalProductsAudited}
+- Productos 100% Cuadrados: ${catalogSummary.balancedProductsCount}
+- Productos con Desfases o Anomalías: ${catalogSummary.discrepantProductsCount}
+- Total Unidades Desfasadas en Catálogo: ${catalogSummary.totalUnitsDrift} unidades
+- Fecha y Hora de Ejecución de Auditoría: ${catalogSummary.auditExecutionTimestamp}
+
+DETALLE DE DISCREPANCIAS:
+${JSON.stringify(catalogSummary.discrepancies, null, 2)}
+
+ANOMALÍAS REGISTRADAS:
+${JSON.stringify(catalogSummary.recentAnomalies, null, 2)}
+        `;
+      }
+
+      const userQuestionPrompt = customQuestion 
+        ? `\nPREGUNTA ESPECÍFICA DE LA ADMINISTRACIÓN:\n"${customQuestion}"\nPor favor responde esta inquietud con la evidencia de los registros.\n`
+        : '';
+
+      const systemPrompt = `
+Eres el Auditor Forense Principal e Investigador de Integridad Contable de GTR POS.
+Tienes acceso de SOLO LECTURA a los registros inmutables de auditoría, ventas, compras y ajustes de almacén.
+
+TU MISIÓN:
+Analizar la evidencia fáctica provista y emitir un DICTAMEN FORENSE PROFESIONAL para la ADMINISTRACIÓN.
+Debes responder con rigurosidad matemática, objetividad, claridad y precisión milimétrica.
+
+DIRECTIVAS CRÍTICAS:
+1. NUNCA inventes números ni nombres. Básate ÚNICAMENTE en la evidencia proporcionada en el contexto fáctico.
+2. Cita SIEMPRE:
+   - Fechas y horas exactas.
+   - Nombres de los usuarios involucrados (ej. "el usuario maria", "el usuario jenny", "el administrador").
+   - Números de tickets de venta o números de lote de compra.
+   - Cantidades exactas y la fórmula matemática: Saldo = Stock Inicial + Compras - Ventas ± Ajustes.
+3. Explica con total claridad QUÉ FALLA HA OCURRIDO, POR QUÉ HA SUCEDIDO (ej. sobreescritura de sincronización por multi-dispositivo, error en conteo físico, omisión de descarga, etc.) y CÓMO QUEDA CUADRADO EL SISTEMA.
+4. Si el catálogo o producto está 100% cuadrado, certifícalo con solvencia técnica explicando la coherencia de todos sus movimientos.
+5. Estructura tu respuesta en Markdown claro y elegante con los siguientes encabezados:
+   - ### 📋 Dictamen Ejecutivo de Auditoría
+   - ### ⏱️ Cronología Forense de Hechos y Usuarios Involucrados
+   - ### 🔢 Conciliación Matemática de Libro Mayor
+   - ### 🔍 Causa Raíz de Desfases Identificados
+   - ### 🛡️ Recomendaciones de Control y Prevención para Administración
+`;
+
+      let diagnosticReport = "";
+      try {
+        const ai = getAI();
+        // Set a 7-second race timeout so the UI is lightning fast and never hangs
+        const aiPromise = ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: `${systemPrompt}\n\nCONTEXTO FÁCTICO DE REGISTROS DE BASE DE DATOS:\n${factualContext}\n${userQuestionPrompt}`
+        });
+
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("AI_TIMEOUT")), 7000));
+        const response: any = await Promise.race([aiPromise, timeoutPromise]);
+        diagnosticReport = response.text || "";
+      } catch (aiErr: any) {
+        console.warn("[Forensic AI] Gemini model response deferred/timeout, using deterministic ledger engine:", aiErr?.message);
+        diagnosticReport = generateForensicMarkdownReport(
+          productDetails,
+          scope === 'single_product' ? null : (scope === 'period' ? null : auditEntireCatalog({ startDate, endDate })),
+          customQuestion,
+          periodResult
+        );
+      }
+
+      if (!diagnosticReport || diagnosticReport.trim() === '') {
+        diagnosticReport = generateForensicMarkdownReport(
+          productDetails,
+          scope === 'single_product' ? null : (scope === 'period' ? null : auditEntireCatalog({ startDate, endDate })),
+          customQuestion,
+          periodResult
+        );
+      }
+
+      res.json({
+        success: true,
+        report: diagnosticReport,
+        productData: productDetails,
+        periodData: periodResult,
+        timestamp: getBoliviaISOString()
+      });
+    } catch (e: any) {
+      console.error("[Forensic AI Error]:", e);
+      res.status(500).json({ error: formatGeminiError(e) });
+    }
+  });
+
 
   app.post("/api/sync/integrity-check", async (req, res) => {
     try {
@@ -6602,7 +6906,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
                 const oldStock = p.stock;
                 const newStock = physical;
 
-                db.prepare('UPDATE products SET stock = ? WHERE id = ?').run(newStock, item.product_id);
+                db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE id = ?').run(newStock, getBoliviaISOString(), item.product_id);
 
                 const logType = diff > 0 ? 'ajuste_incremento' : 'ajuste_decremento';
                 const absQty = Math.abs(diff);
@@ -7864,7 +8168,7 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
 
                     if (existing) {
                       // Update existing product stock instead of creating a duplicate
-                      db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(Number(stock || 0), existing.id);
+                      db.prepare('UPDATE products SET stock = stock + ?, updated_at = ? WHERE id = ?').run(Number(stock || 0), getBoliviaISOString(), existing.id);
                       syncAfterWrite("products");
                       
                       safeSend(JSON.stringify({
@@ -7944,9 +8248,9 @@ Debes responder estrictamente en formato JSON sin preámbulos, markdown duplicad
                 } else if (fc.name === "updateProductStock") {
                   const { skuOrName, stock } = fc.args as any;
                   try {
-                    let updated = db.prepare('UPDATE products SET stock = ? WHERE sku = ?').run(stock, skuOrName);
+                    let updated = db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE sku = ?').run(stock, getBoliviaISOString(), skuOrName);
                     if (updated.changes === 0) {
-                      updated = db.prepare('UPDATE products SET stock = ? WHERE name LIKE ?').run(stock, `%${skuOrName}%`);
+                      updated = db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE name LIKE ?').run(stock, getBoliviaISOString(), `%${skuOrName}%`);
                     }
                     syncAfterWrite("products");
                     

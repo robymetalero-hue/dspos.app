@@ -77,7 +77,19 @@ export const DEFAULT_PERMISSIONS: Record<string, boolean> = {
   view_audit: false,
   access_ai: true,
   view_diagnostics: false,
+  access_forensic_audit: false, // Strict: only admins by default, or explicitly delegated by admin
 };
+
+/**
+ * Helper to identify if user can access the Forensic AI Audit module.
+ * Restricted strictly to admins / propietarios or users with explicit delegated permission.
+ */
+export function canAccessForensicAudit(user: any): boolean {
+  if (!user) return false;
+  if (user.role === 'admin' || user.role === 'propietario' || user.role === 'administrador') return true;
+  if (isMainAdmin(user)) return true;
+  return hasPermission(user, 'access_forensic_audit');
+}
 
 /**
  * Helper to identify if user is Admin / Propietario / Master Account.

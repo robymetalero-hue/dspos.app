@@ -113,7 +113,8 @@ const ALL_PERMISSION_GROUPS: PermissionGroup[] = [
       { key: 'admin_users', label: 'Administrar usuarios', description: 'Habilita la creación y edición de cajeros.', defaultValue: false },
       { key: 'admin_permissions', label: 'Administrar permisos', description: 'Acceso a esta consola de privilegios.', defaultValue: false },
       { key: 'view_audit', label: 'Ver bitácora de auditoría', description: 'Muestra logs detallados de seguridad y almacén.', defaultValue: false },
-      { key: 'access_ai', label: 'Acceso a la IA (GTR-Heurística)', description: 'Permite interactuar con el asistente de voz y comandos rápidos de Inteligencia Artificial.', defaultValue: true }
+      { key: 'access_ai', label: 'Acceso a la IA (GTR-Heurística)', description: 'Permite interactuar con el asistente de voz y comandos rápidos de Inteligencia Artificial.', defaultValue: true },
+      { key: 'access_forensic_audit', label: 'Auditoría Forense con IA', description: 'Permite acceder al módulo forense de revisión matemática profunda de registros, cálculo de libro mayor y diagnóstico de discrepancias con IA.', defaultValue: false }
     ]
   }
 ];

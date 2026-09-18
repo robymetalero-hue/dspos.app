@@ -685,14 +685,26 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
               }
             }
 
-            if (table === 'products' && !forceOverwrite && data.id) {
+            if (table === 'products' && data.id) {
               try {
-                const localProd = db.prepare("SELECT stock, updated_at FROM products WHERE id = ?").get(data.id) as any;
-                if (localProd && localProd.updated_at && data.updated_at) {
-                  const localTime = new Date(localProd.updated_at).getTime();
-                  const remoteTime = new Date(data.updated_at).getTime();
-                  if (!isNaN(localTime) && !isNaN(remoteTime) && localTime > remoteTime) {
-                    continue;
+                const localProd = db.prepare("SELECT id, stock, updated_at FROM products WHERE id = ?").get(data.id) as any;
+                if (localProd) {
+                  // ANTI-OVERWRITE STOCK SHIELD:
+                  // Stock is an inventory counter governed by historical sales, arrivals, and audit logs.
+                  // Remote snapshot documents can be pushed from stale clients editing metadata (names, prices, categories).
+                  // We must NEVER allow a remote product snapshot to overwrite a local verified stock unless forceOverwrite is explicitly true.
+                  if (!forceOverwrite) {
+                    if (localProd.updated_at && data.updated_at) {
+                      const localTime = new Date(localProd.updated_at).getTime();
+                      const remoteTime = new Date(data.updated_at).getTime();
+                      if (!isNaN(localTime) && !isNaN(remoteTime) && localTime >= remoteTime) {
+                        continue;
+                      }
+                    }
+                    // Preserve local physical stock so that remote metadata edits (price, cost, name) never stomp on inventory
+                    if (localProd.stock !== undefined && localProd.stock !== null) {
+                      data.stock = localProd.stock;
+                    }
                   }
                 }
               } catch (e: any) {}
@@ -755,6 +767,14 @@ export async function pullFirestoreToLocal(forceOverwrite: boolean = false) {
     });
 
     globalSyncTx();
+
+    // AUTOMATED CATALOG STOCK SHIELD RECONCILIATION:
+    // Guarantees that no product stock has drifted from its transactional history.
+    try {
+      reconcileCatalogStockWithLedger();
+    } catch (reconcileErr: any) {
+      console.warn('[Sync Guard] Warning during post-pull stock reconciliation:', reconcileErr.message);
+    }
 
     lastPullTimestamp = Date.now();
     
@@ -926,4 +946,62 @@ export async function clearAllFirestoreAndLocalData(): Promise<void> {
   } catch (e) {}
 
   console.log("[Sync Reset] Complete database reset finished successfully. Database is now at clean zero state.");
+}
+
+/**
+ * AUTOMATED CATALOG STOCK SHIELD RECONCILIATION
+ * Mathematical source of truth verification:
+ * Real Stock = Initial Stock + Total Arrivals - Total Sales + Total Adjustments
+ * Reconciles any drifts between products.stock and historical transaction ledger.
+ */
+export function reconcileCatalogStockWithLedger(): { audited: number; corrected: number; corrections: any[] } {
+  const prods = db.prepare('SELECT id, name, sku, stock FROM products').all() as any[];
+  let corrected = 0;
+  const corrections: any[] = [];
+  const nowIso = new Date().toISOString();
+
+  for (const p of prods) {
+    // 1. Initial stock at product creation
+    const createLog = db.prepare(`
+      SELECT quantity_after 
+      FROM system_audit_logs 
+      WHERE (related_product_id = ? OR entity_id = ?) AND event_type = 'creacion_producto'
+      ORDER BY created_at ASC LIMIT 1
+    `).get(p.id, p.id) as any;
+    const initialStock = createLog ? (createLog.quantity_after || 0) : 0;
+
+    // 2. Cumulative arrivals
+    const arrivals = (db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM stock_arrivals WHERE product_id = ?').get(p.id) as any)?.total || 0;
+
+    // 3. Cumulative sales
+    const sales = (db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM sale_items WHERE product_id = ?').get(p.id) as any)?.total || 0;
+
+    // 4. Inventory manual adjustments (excluding forensic audit reconciliation logs)
+    const adjustments = db.prepare(`
+      SELECT 
+        COALESCE(SUM(CASE WHEN type = 'ajuste_incremento' OR type = 'ingreso_devolucion' THEN quantity ELSE 0 END), 0) as inc,
+        COALESCE(SUM(CASE WHEN type = 'ajuste_decremento' THEN quantity ELSE 0 END), 0) as dec
+      FROM inventory_audit_logs
+      WHERE product_id = ? AND reference != 'Auditoría Forense de Stock'
+    `).get(p.id) as any;
+
+    const expectedStock = initialStock + arrivals - sales + (adjustments?.inc || 0) - (adjustments?.dec || 0);
+
+    if (expectedStock !== p.stock) {
+      const diff = expectedStock - p.stock;
+      db.prepare('UPDATE products SET stock = ?, updated_at = ? WHERE id = ?').run(expectedStock, nowIso, p.id);
+      
+      db.prepare(`
+        INSERT INTO inventory_audit_logs 
+        (product_id, product_name, product_sku, type, quantity, price, user_id, username, reference, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, 0, 1, 'system_guard', 'Auditoría Automática de Blindaje', ?, ?)
+      `).run(p.id, p.name, p.sku, diff > 0 ? 'ajuste_incremento' : 'ajuste_decremento', Math.abs(diff), `Blindaje reactivo: Stock corregido de ${p.stock} a ${expectedStock} según libro mayor inmutable`, nowIso);
+
+      corrected++;
+      corrections.push({ id: p.id, name: p.name, sku: p.sku, oldStock: p.stock, newStock: expectedStock, diff });
+      console.log(`[Stock Guard Shield] Reconciled Product #${p.id} (${p.name}): ${p.stock} -> ${expectedStock}`);
+    }
+  }
+
+  return { audited: prods.length, corrected, corrections };
 }

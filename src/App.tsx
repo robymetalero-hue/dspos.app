@@ -2,7 +2,7 @@ import { safeDispatchEvent } from "./utils/events";
 import React, { useState, useEffect, useLayoutEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AppProvider, useAppContext } from './context/AppContext';
-import { hasPermission, isMainAdmin, isAdminUser } from './utils/permissions';
+import { hasPermission, isMainAdmin, isAdminUser, canAccessForensicAudit } from './utils/permissions';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { startAutoBackupScheduler } from "./utils/driveBackupScheduler";
 import { hardRefreshApp } from "./utils/appRefresh";
@@ -22,7 +22,7 @@ import OfflineManagerModal from './components/OfflineManagerModal';
 import PWAInstallModal from './components/PWAInstallModal';
 import { Menu, X, Home, ShoppingCart, Clock, Receipt, PackageSearch, 
     Folder, ClipboardCheck, Undo2, LayoutDashboard, TrendingUp, 
-    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw, Check, Zap
+    Users, Smartphone, LogOut, Sun, Moon, Sparkles, ArrowLeftRight, User, Settings, Landmark, Activity, History, Loader2, Store, Cpu, Download, RefreshCw, Check, Zap, ShieldCheck
 } from 'lucide-react';
 
 const lazyWithRetries = (componentImport: () => Promise<any>) =>
@@ -54,6 +54,7 @@ const CajasView = lazyWithRetries(() => import('./views/CajasView'));
 const CuentasPorCobrarView = lazyWithRetries(() => import('./views/CuentasPorCobrarView'));
 const DiagnosticoView = lazyWithRetries(() => import('./views/DiagnosticoView'));
 const AuditoriaView = lazyWithRetries(() => import('./views/AuditoriaView'));
+const AuditoriaForenseView = lazyWithRetries(() => import('./views/AuditoriaForenseView'));
 const HardwareConfigView = lazyWithRetries(() => import('./views/HardwareConfigView'));
 
 // Named exports from ExtraViews loaded dynamically
@@ -468,6 +469,9 @@ function AppLayout() {
         if (view === 'diagnostico' && !isAdminUser(user)) {
             setView('pos');
         }
+        if (view === 'auditoria_forense' && !canAccessForensicAudit(user)) {
+            setView('pos');
+        }
     }, [view, user]);
 
     if (!user || (user.role as string) === 'none' || user.username === 'none') {
@@ -651,6 +655,7 @@ function AppLayout() {
                         {renderNavItem('configuraciones', 'Configuraciones', Settings)}
                         {renderNavItem('hardware', 'Conexión de Hardware', Cpu)}
                         {isAdminUser(user) && renderNavItem('diagnostico', 'Diagnósticos & IA', Activity, 'view_diagnostics')}
+                        {canAccessForensicAudit(user) && renderNavItem('auditoria_forense', 'Auditoría Forense IA', ShieldCheck, 'access_forensic_audit')}
                         {user?.role === 'admin' && renderNavItem('usuarios', 'Usuarios', Users)}
                     </div>
                 </div>
@@ -1027,6 +1032,7 @@ function AppLayout() {
                                     {renderNavItem('cajas', 'Cajas & Ingresos', Landmark, 'manage_caja')}
                                     {renderNavItem('configuraciones', 'Configuraciones', Settings)}
                                     {isAdminUser(user) && renderNavItem('diagnostico', 'Diagnósticos & IA', Activity, 'view_diagnostics')}
+                                    {canAccessForensicAudit(user) && renderNavItem('auditoria_forense', 'Auditoría Forense IA', ShieldCheck, 'access_forensic_audit')}
                                     {user?.role === 'admin' && renderNavItem('usuarios', 'Usuarios', Users)}
                                 </motion.div>
 
@@ -1213,6 +1219,7 @@ function AppLayout() {
                                 {view === 'configuraciones' && <ConfiguracionesView />}
                                 {view === 'hardware' && <HardwareConfigView />}
                                 {view === 'diagnostico' && (isAdminUser(user) ? <DiagnosticoView /> : <POS />)}
+                                {view === 'auditoria_forense' && (canAccessForensicAudit(user) ? <AuditoriaForenseView /> : <POS />)}
                             </React.Suspense>
                         </motion.div>
                     </AnimatePresence>
